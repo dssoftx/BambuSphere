@@ -140,6 +140,7 @@ After initial setup, Web Config can be protected with a temporary six-digit PIN.
 
 - [BambuSphere Web Installer](https://dssoftx.github.io/BambuSphere/flash/)
 - [v1.7.0 release notes](release/RELEASE_NOTES_v1.7.0.md)
+- [v1.7.1 (beta) release notes](release/RELEASE_NOTES_v1.7.1.md) — dual-nozzle and HMS-code display fixes, available in the installer's beta channel
 - [Building, cloning and manual flashing](docs/Build/README.md)
 - [Original PrintSphere project](https://github.com/cptkirki/PrintSphere)
 - [License](LICENSE)

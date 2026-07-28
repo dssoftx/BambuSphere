@@ -544,6 +544,15 @@
           otaUrl: "https://github.com/dssoftx/BambuSphere/blob/main/release/2.8c/ota/printsphere_ota.bin",
           note: 'Factory flash image for the ESP32-S3-Touch-LCD-2.8C hardware variant on v1.6.2. Keep the USB cable connected after the flash: the Wi-Fi picker appears automatically, so the setup hotspot is only needed as a fallback.',
         },
+        {
+          label: "Beta v1.7.1 (1.75 AMOLED)",
+          channel: "Beta",
+          version: "v1.7.1",
+          path: "../release/beta/printsphere_full.bin",
+          displayPath: "release/beta/printsphere_full.bin",
+          otaUrl: "https://github.com/dssoftx/BambuSphere/blob/main/release/beta/printsphere_ota.bin",
+          note: "Bugfix beta on top of v1.7.0: fixes the main-page printer name being hidden behind an unresolved HMS code on some models (e.g. H2D), and fixes the dual-nozzle \"L \"/\"R \" temperature label wrapping to a second line. See the v1.7.1 release notes for details.",
+        },
       ];
 
       const select = document.querySelector("#firmware-select");
