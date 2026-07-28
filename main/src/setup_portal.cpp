@@ -820,7 +820,7 @@ PortalAccessSnapshot SetupPortal::access_snapshot(bool request_authorized) {
     } else if (wifi_manager_.is_setup_access_point_active()) {
       snapshot.detail = "Web Config is open while the setup access point is active.";
     } else if (!wifi_manager_.is_station_connected()) {
-      snapshot.detail = "Web Config is open while PrintSphere is waiting for Wi-Fi credentials.";
+      snapshot.detail = "Web Config is open while BambuSphere is waiting for Wi-Fi credentials.";
     } else if (provisioning_grace_expiry_ms_ != 0 && current_ms < provisioning_grace_expiry_ms_) {
       const uint32_t grace_remaining_s =
           static_cast<uint32_t>((provisioning_grace_expiry_ms_ - current_ms) / 1000ULL);
@@ -976,7 +976,7 @@ esp_err_t SetupPortal::send_unlock_page(httpd_req_t* request) {
   std::string html;
   html.reserve(5000);
   html += "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">";
-  html += "<title>PrintSphere Unlock</title><style>";
+  html += "<title>BambuSphere Unlock</title><style>";
   html += "body{margin:0;font-family:'Segoe UI',sans-serif;background:radial-gradient(circle at top,#172633,#071018 62%);color:#f8fafc;min-height:100vh;display:grid;place-items:center;padding:20px;}";
   html += ".card{width:min(420px,100%);background:rgba(6,18,26,.92);border:1px solid rgba(240,166,75,.28);border-radius:26px;padding:28px;box-shadow:0 22px 80px rgba(0,0,0,.45);}";
   html += "h1{margin:0 0 10px;font-size:32px;}p{margin:0 0 14px;line-height:1.45;color:#cbd5e1;}label{display:block;margin:18px 0 8px;color:#f8fafc;font-weight:600;}";
@@ -990,7 +990,7 @@ esp_err_t SetupPortal::send_unlock_page(httpd_req_t* request) {
   html += "<form id=\"unlock-form\"><label for=\"pin\">Unlock PIN</label><input id=\"pin\" inputmode=\"numeric\" autocomplete=\"one-time-code\" maxlength=\"6\" placeholder=\"000000\">";
   html += "<button type=\"submit\" id=\"unlock-button\">Unlock Web Config</button></form>";
   html += "<div class=\"status\" id=\"status\">Waiting for PIN</div>";
-  html += "<p class=\"micro\">Long-press anywhere on the PrintSphere display for one second. The 6-digit PIN appears on the device, not in the browser.</p>";
+  html += "<p class=\"micro\">Long-press anywhere on the BambuSphere display for one second. The 6-digit PIN appears on the device, not in the browser.</p>";
   html += "</main><script>";
   html += "const form=document.getElementById('unlock-form');const pin=document.getElementById('pin');const statusEl=document.getElementById('status');const detailEl=document.getElementById('detail');const button=document.getElementById('unlock-button');";
   html += "async function refresh(){try{const response=await fetch('/api/health',{cache:'no-store'});const body=await response.json().catch(()=>({}));if(body.portal_locked===false){window.location.reload();return;}detailEl.textContent=body.portal_detail||'Hold anywhere on the device display for one second to show an unlock PIN.';statusEl.textContent=body.portal_pin_active?'PIN visible on the display':'Portal locked';}catch(error){statusEl.textContent='Portal unreachable';}}";
@@ -1518,7 +1518,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   const auto end_settings_panel = [&html]() { html += "</div></details>"; };
   html += "<!doctype html><html><head><meta charset=\"utf-8\">";
   html += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
-  html += "<title>PrintSphere Web Config</title>";
+  html += "<title>BambuSphere Web Config</title>";
   html += "<style>";
   html += ":root{--bg:#0b1015;--panel:#121a23;--panel-2:#172230;--line:#263548;--text:#eef4fb;"
           "--muted:#99a9bb;--accent:#f0a64b;--accent-2:#42c291;--warn:#f5c24f;--danger:#ff6b6b;}";
@@ -1626,7 +1626,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   };
 
   html += "<section class=\"hero\">";
-  html += "<div class=\"hero-top\"><div class=\"hero-brand\"><div class=\"eyebrow\">PrintSphere</div><a class=\"hero-version\" href=\"https://github.com/cptkirki/PrintSphere\" target=\"_blank\" rel=\"noopener noreferrer\">";
+  html += "<div class=\"hero-top\"><div class=\"hero-brand\"><div class=\"eyebrow\">BambuSphere</div><a class=\"hero-version\" href=\"https://github.com/dssoftx/BambuSphere\" target=\"_blank\" rel=\"noopener noreferrer\">";
   html += json_escape(kPortalReleaseVersion);
   html += "</a></div><div id=\"portal-timer\" style=\"display:none\" title=\"Click to extend session by 5 minutes\"></div></div>";
   html += "<h1 class=\"title\">Web Config</h1>";
@@ -1742,7 +1742,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
     html += "</span><div class=\"micro\" id=\"mqtt-local-telemetry\" style=\"margin-top:4px;color:#666;\"></div></div>";
     html += "<div class=\"actions\"><button type=\"button\" class=\"secondary\" id=\"local-connect-button\">Connect Local</button>";
     html += "<div class=\"micro\">This saves the local printer credentials immediately. In Hybrid and Local only it also reconnects MQTT and camera without rebooting.</div></div>";
-    html += "<p class=\"micro\">In Hybrid mode PrintSphere auto-picks the better status path for your printer and still uses the local camera when available.</p>";
+    html += "<p class=\"micro\">In Hybrid mode BambuSphere auto-picks the better status path for your printer and still uses the local camera when available.</p>";
     end_collapsible_section();
   };
 
@@ -2156,7 +2156,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
                        ? "Long-press on the device display to show a temporary 6-digit unlock PIN whenever you need browser access."
                        : "With the PIN lock disabled, anyone on the same home network can open Web Config without the device-generated PIN.");
     html += "</div>";
-    html += "<p class=\"micro\">The lock never applies while PrintSphere is still in setup AP mode.</p>";
+    html += "<p class=\"micro\">The lock never applies while BambuSphere is still in setup AP mode.</p>";
     end_settings_panel();
     html += "</div>";
     end_collapsible_section();
@@ -2303,7 +2303,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   if (show_connection_steps) {
     begin_collapsible_section(
         "Arc Colors",
-        "These groups control ring colors, pulsing states and status colors in the UI. The values map directly to your native PrintSphere interface.",
+        "These groups control ring colors, pulsing states and status colors in the UI. The values map directly to your native BambuSphere interface.",
         arc_badge_value, arc_badge_class, arc_section_open);
     html += "<p class=\"micro\">Color changes preview live immediately and are saved automatically. No restart is needed for color tuning.</p>";
     html += "<div class=\"color-grid\">";
@@ -2328,18 +2328,18 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   if (show_connection_steps) {
     begin_collapsible_section(
         "Firmware Update",
-        "Upload a compiled PrintSphere .bin firmware image to update the device over-the-air without a USB connection.",
+        "Upload a compiled BambuSphere .bin firmware image to update the device over-the-air without a USB connection.",
         "OTA", "idle", false);
-    html += "<div class=\"hint-box\"><strong>Warning:</strong> The device restarts immediately after a successful flash. Only upload firmware built for PrintSphere (ESP32-S3).</div>";
+    html += "<div class=\"hint-box\"><strong>Warning:</strong> The device restarts immediately after a successful flash. Only upload firmware built for BambuSphere (ESP32-S3).</div>";
     html += "<div class=\"field\"><label for=\"ota_file\">Firmware .bin file</label>";
     html += "<input type=\"file\" id=\"ota_file\" accept=\".bin\"></div>";
     html += "<div id=\"ota-progress-wrap\" style=\"display:none;margin:4px 0;height:8px;border-radius:6px;background:#0e1620;overflow:hidden\">";
     html += "<div id=\"ota-progress-bar\" style=\"height:100%;width:0%;background:var(--accent);transition:width .25s;\"></div></div>";
     html += "<div class=\"actions\"><button type=\"button\" class=\"secondary\" id=\"ota-upload-button\">Upload &amp; Flash</button>";
-    html += "<div class=\"micro\" id=\"ota-status\">Select a .bin file built for PrintSphere (ESP32-S3).</div></div>";
+    html += "<div class=\"micro\" id=\"ota-status\">Select a .bin file built for BambuSphere (ESP32-S3).</div></div>";
     html += "<hr style=\"border:none;border-top:1px solid var(--line);margin:16px 0 4px\">";
     html += "<div class=\"field\"><label for=\"ota_url\">Or flash from URL</label>";
-    html += "<input type=\"url\" id=\"ota_url\" placeholder=\"https://github.com/cptkirki/PrintSphere/blob/main/release/ota/printsphere_ota.bin\" autocomplete=\"off\" spellcheck=\"false\"></div>";
+    html += "<input type=\"url\" id=\"ota_url\" placeholder=\"https://github.com/dssoftx/BambuSphere/blob/main/release/ota/printsphere_ota.bin\" autocomplete=\"off\" spellcheck=\"false\"></div>";
     html += "<p class=\"micro\">GitHub blob links (github.com/&hellip;/blob/&hellip;) are converted to raw download URLs automatically.</p>";
     html += "<div id=\"ota-url-progress-wrap\" style=\"display:none;margin:4px 0;height:8px;border-radius:6px;background:#0e1620;overflow:hidden\">";
     html += "<div id=\"ota-url-progress-bar\" style=\"height:100%;width:0%;background:var(--accent);transition:width .3s;\"></div></div>";
@@ -2868,7 +2868,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
                   "if(!ok)chk.checked=!chk.checked;})(i));"
               "if(fi)fi.addEventListener('change',((idx)=>async()=>{"
                   "const f=fi.files[0];if(!f)return;"
-                  "setStatus('Uploading sound...','Sending WAV to PrintSphere.',6000);"
+                  "setStatus('Uploading sound...','Sending WAV to BambuSphere.',6000);"
                   "const buf=await f.arrayBuffer();"
                   "const fn=f.name.replace(/\\.[^.]+$/,'');"
                   "const shortName=fn.length>7?fn.slice(0,7)+'\u2026':fn;"
@@ -3081,7 +3081,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   html += "otaBtn.addEventListener('click',function(){";
   html += "var file=otaFile.files&&otaFile.files[0];";
   html += "if(!file){otaStatus.textContent='Select a .bin file first.';return;}";
-  html += "if(!confirm('This will flash new firmware and restart PrintSphere. Continue?'))return;";
+  html += "if(!confirm('This will flash new firmware and restart BambuSphere. Continue?'))return;";
   html += "otaBtn.disabled=true;otaWrap.style.display='';otaBar.style.width='0%';";
   html += "otaStatus.textContent='Uploading...';";
   html += "var xhr=new XMLHttpRequest();";
@@ -3093,7 +3093,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   html += "var body={};try{body=JSON.parse(xhr.responseText||'{}');}catch(e){}";
   html += "if(xhr.status===200){otaBar.style.width='100%';";
   html += "otaStatus.textContent='Flash successful - device is restarting...';";
-  html += "setStatus('Firmware flashed','PrintSphere is rebooting to the new firmware now.',60000);}";
+  html += "setStatus('Firmware flashed','BambuSphere is rebooting to the new firmware now.',60000);}";
   html += "else{otaStatus.textContent='Upload failed: '+(body.error||xhr.statusText||'unknown error');otaBtn.disabled=false;}};";
   html += "xhr.onerror=function(){otaStatus.textContent='Upload failed - network error.';otaBtn.disabled=false;};";
   html += "xhr.open('POST','/api/ota/upload');";
@@ -3107,7 +3107,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   html += "var otaUrlPoll=null;";
   html += "var otaUrlFromInstallPage=new URLSearchParams(window.location.search).get('ota_url');"
           "if(otaUrlFromInstallPage&&otaUrlInput){otaUrlInput.value=otaUrlFromInstallPage;"
-          "if(otaUrlStatus)otaUrlStatus.textContent='OTA image selected by the PrintSphere install page.';}";
+          "if(otaUrlStatus)otaUrlStatus.textContent='OTA image selected by the BambuSphere install page.';}";
   html += "function githubToRaw(u){"
           "if(u.indexOf('github.com/')===-1)return u;"
           "var p=u.replace('https://github.com/','');"
@@ -3127,7 +3127,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "}else if(b.state==='done'){"
           "if(otaUrlBar)otaUrlBar.style.width='100%';"
           "if(otaUrlStatus)otaUrlStatus.textContent='Flash successful \u2014 device is restarting...';"
-          "setStatus('Firmware flashed','PrintSphere is rebooting to the new firmware now.',60000);"
+          "setStatus('Firmware flashed','BambuSphere is rebooting to the new firmware now.',60000);"
           "}else if(b.state==='failed'){"
           "if(otaUrlStatus)otaUrlStatus.textContent='Flash failed: '+(b.error||'unknown error');"
           "if(otaUrlBtn)otaUrlBtn.disabled=false;"
@@ -4830,7 +4830,7 @@ esp_err_t SetupPortal::handle_ota_upload(httpd_req_t* request) {
     httpd_resp_set_status(request, "422 Unprocessable Entity");
     send_json(
         request,
-        "{\"error\":\"Firmware validation failed\",\"detail\":\"The uploaded file does not appear to be a valid PrintSphere firmware image.\"}");
+        "{\"error\":\"Firmware validation failed\",\"detail\":\"The uploaded file does not appear to be a valid BambuSphere firmware image.\"}");
     return ESP_OK;
   }
 

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
-    <title>PrintSphere Factory Flash</title>
+    <title>BambuSphere Factory Flash</title>
     <script
       type="module"
       src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"
@@ -423,14 +423,14 @@
   <body>
     <div class="page">
       <header class="topbar">
-        <div class="brand" aria-label="PrintSphere">
+        <div class="brand" aria-label="BambuSphere">
           <div class="mark" aria-hidden="true">PS</div>
           <div class="brand-text">
-            <p class="brand-name">PrintSphere</p>
+            <p class="brand-name">BambuSphere</p>
             <p class="brand-subtitle">USB setup for new devices</p>
           </div>
         </div>
-        <a class="repo-link" href="https://github.com/cptkirki/PrintSphere">GitHub repository</a>
+        <a class="repo-link" href="https://github.com/dssoftx/BambuSphere">GitHub repository</a>
       </header>
 
       <main>
@@ -438,7 +438,7 @@
           <div class="tool">
             <h1 id="page-title">Factory Flash</h1>
             <p class="lead">
-              Prepare a new PrintSphere device directly from your browser. Connect it with a
+              Prepare a new BambuSphere device directly from your browser. Connect it with a
               USB data cable, choose the firmware, then start the install.
             </p>
 
@@ -454,7 +454,7 @@
               </div>
               <div class="fact">
                 <span>Version</span>
-                <strong id="firmware-version">v1.6.2</strong>
+                <strong id="firmware-version">v1.7.0</strong>
               </div>
               <div class="fact">
                 <span>Flash offset</span>
@@ -480,13 +480,13 @@
             </div>
           </div>
 
-          <aside class="visual" aria-label="PrintSphere device">
+          <aside class="visual" aria-label="BambuSphere device">
             <img
               src="https://github.com/user-attachments/assets/820c2e9b-10a7-4430-949c-e8b0adc1357d"
-              alt="PrintSphere circular display device"
+              alt="BambuSphere circular display device"
             >
             <div class="caption">
-              <strong id="caption-version">Stable v1.6.2</strong>
+              <strong id="caption-version">Stable v1.7.0</strong>
               <span id="caption-path">release/initial/printsphere_full.bin</span>
             </div>
           </aside>
@@ -499,18 +499,18 @@
           </div>
           <div class="detail">
             <h2>Device</h2>
-            <p>Use this for the Waveshare ESP32-S3 AMOLED hardware used by PrintSphere.</p>
+            <p>Use this for the Waveshare ESP32-S3 AMOLED hardware used by BambuSphere.</p>
           </div>
           <div class="detail">
             <h2>Next Step</h2>
-            <p>Keep the USB cable connected after flashing. The installer will scan for Wi-Fi networks and configure PrintSphere directly over USB.</p>
+            <p>Keep the USB cable connected after flashing. The installer will scan for Wi-Fi networks and configure BambuSphere directly over USB.</p>
           </div>
         </section>
 
         <section class="ota-panel" aria-labelledby="ota-title">
           <div>
             <h2 id="ota-title">OTA Update — keep your configuration</h2>
-            <p>For an existing PrintSphere, open its Web Config page and use the matching OTA image. This updates the inactive firmware slot and retains Wi-Fi, printer and display settings.</p>
+            <p>For an existing BambuSphere, open its Web Config page and use the matching OTA image. This updates the inactive firmware slot and retains Wi-Fi, printer and display settings.</p>
             <p class="note warning" id="ota-note">Select the same hardware variant that is installed on your device.</p>
           </div>
           <div class="ota-actions">
@@ -527,13 +527,13 @@
     <script>
       const firmwares = [
         {
-          label: "Stable v1.6.2 (1.75 AMOLED)",
+          label: "Stable v1.7.0 (1.75 AMOLED)",
           channel: "Stable",
-          version: "v1.6.2",
+          version: "v1.7.0",
           path: "../release/initial/printsphere_full.bin",
           displayPath: "release/initial/printsphere_full.bin",
-          otaUrl: "https://github.com/cptkirki/PrintSphere/blob/main/release/ota/printsphere_ota.bin",
-          note: "Factory flash erases device data before installing v1.6.2. Keep the USB cable connected after the flash: the Wi-Fi picker appears automatically, so the setup hotspot is only needed as a fallback.",
+          otaUrl: "https://github.com/dssoftx/BambuSphere/blob/main/release/ota/printsphere_ota.bin",
+          note: "Factory flash erases device data before installing v1.7.0. Keep the USB cable connected after the flash: the Wi-Fi picker appears automatically, so the setup hotspot is only needed as a fallback.",
         },
         {
           label: 'Stable v1.6.2 (2.8" LCD)',
@@ -541,7 +541,7 @@
           version: "v1.6.2-2.8C",
           path: "../release/2.8c/initial/printsphere_full.bin",
           displayPath: "release/2.8c/initial/printsphere_full.bin",
-          otaUrl: "https://github.com/cptkirki/PrintSphere/blob/main/release/2.8c/ota/printsphere_ota.bin",
+          otaUrl: "https://github.com/dssoftx/BambuSphere/blob/main/release/2.8c/ota/printsphere_ota.bin",
           note: 'Factory flash image for the ESP32-S3-Touch-LCD-2.8C hardware variant on v1.6.2. Keep the USB cable connected after the flash: the Wi-Fi picker appears automatically, so the setup hotspot is only needed as a fallback.',
         },
       ];
@@ -575,7 +575,7 @@
         const imageUrl = new URL(firmware.path, window.location.href).href;
 
         return {
-          name: "PrintSphere",
+          name: "BambuSphere",
           version: firmware.version,
           new_install_prompt_erase: false,
           new_install_improv_wait_time: 30,

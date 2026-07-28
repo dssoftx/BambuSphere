@@ -1,4 +1,4 @@
-# PrintSphere 2.8C Release
+# BambuSphere 2.8C Release
 
 Diese Dateien sind die vorkonfektionierten Firmware-Artefakte fuer das Board
 `ESP32-S3-Touch-LCD-2.8C`.

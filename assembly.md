@@ -121,9 +121,9 @@ The bootloader is already included in the merged image.
 
 ## Quick Setup Summary
 
-1. After flashing, PrintSphere starts a setup AP:
-   - SSID: `PrintSphere-Setup`
-   - password: `printsphere`
+1. After flashing, BambuSphere starts a setup AP:
+   - SSID: `BambuSphere-Setup`
+   - password: `bambusphere`
 2. Connect to that Wi-Fi and open `http://192.168.4.1`.
 3. Save your home Wi-Fi credentials.
 4. After reboot, open the new device IP in your home network.
@@ -162,7 +162,7 @@ Camera notes:
 ## Troubleshooting
 
 - If Web Config is locked, hold the display again to request a new PIN.
-- If the device does not join your home Wi-Fi, reconnect to `PrintSphere-Setup` and recheck the credentials.
+- If the device does not join your home Wi-Fi, reconnect to `BambuSphere-Setup` and recheck the credentials.
 - If Bambu asks for a code during login, enter it directly in Web Config and then click "Submit Code"
 - If cloud setup appears to work but printer data is still incomplete, add the local printer path and test `Hybrid`.
 - If the camera page matters to you, the strongest current local camera support is on `A1` and `P1` family printers.

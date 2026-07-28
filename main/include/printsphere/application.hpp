@@ -42,6 +42,9 @@ class Application {
   bool last_camera_page_active_ = false;
   bool hybrid_local_gate_open_ = false;
   TickType_t hybrid_camera_cooldown_deadline_ = 0;
+  // Throttles the printer-profile NVS scan feeding update_printer_cards()
+  // while the printer-select page isn't active (see the run() loop).
+  TickType_t printer_cards_refresh_deadline_ = 0;
   std::atomic<TickType_t> local_mqtt_handoff_until_tick_{0};
   bool filament_wake_enabled_ = false;
   bool filament_anim_enabled_ = true;

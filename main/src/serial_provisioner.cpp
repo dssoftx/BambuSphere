@@ -227,7 +227,7 @@ void SerialProvisioner::process_rpc(Transport transport, const uint8_t* data, si
 
     case kCommandDeviceInfo:
       send_rpc_result(transport, kCommandDeviceInfo,
-                      {"PrintSphere", PRINTSPHERE_RELEASE_VERSION, hardware_variant(),
+                      {"BambuSphere", PRINTSPHERE_RELEASE_VERSION, hardware_variant(),
                        config_store_.load_device_name()});
       return;
 

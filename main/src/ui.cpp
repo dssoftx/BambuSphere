@@ -17,7 +17,6 @@
 #include "esp_memory_utils.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
-#include "png.h"
 #include "printsphere/board_config.hpp"
 
 #if defined(PRINTSPHERE_HW_VARIANT_AMOLED_1_75)
@@ -43,26 +42,11 @@ namespace printsphere {
 namespace {
 
 constexpr char kTag[] = "printsphere.ui";
-constexpr size_t kImagePersistentReserveBytes = 20U * 1024U;
-constexpr int kDefaultBrightnessPercent = 80;
 constexpr int kRingStrokeWidth = 22;
-constexpr int kRemainingRowY = 172;
-// Page-2 preview cover layout. The compact layout (240 px cover, lifted up
-// to make room for two print-control buttons below) is only used when the
-// experimental print-control buttons are compiled in. The default build keeps
-// the original full-size cover layout (320 px, centered) to preserve the
-// look-and-feel of releases prior to v1.6-rc1.
-#if CONFIG_PRINTSPHERE_EXPERIMENTAL_PRINT_CONTROL
-constexpr int kPage2PreviewSize = 240;
-constexpr int kPage2PreviewYOffset = -90;
-constexpr int kPage2NoteWithImageY = 56;
-constexpr int kPage2SubnoteWithImageY = 60;
-#else
-constexpr int kPage2PreviewSize = 320;
-constexpr int kPage2PreviewYOffset = -12;
-constexpr int kPage2NoteWithImageY = 138;
-constexpr int kPage2SubnoteWithImageY = 188;
-#endif
+// Moved up from the ring edge (was 172) — a 280px-wide row at 172 clips
+// into the ring on a round display; also narrowed to fit comfortably.
+constexpr int kRemainingRowY = 145;
+constexpr int kRemainingRowWidth = 260;
 constexpr int kPage3CameraWidth = 400;
 constexpr int kPage3CameraHeight = 224;
 constexpr int kPage3CameraYOffset = 0;
@@ -72,7 +56,44 @@ constexpr int kPage3SubnoteWithImageY = 182;
 // Image is 224 high and centered at y=0, so its top is ~y=-112; the
 // status sits above with comfortable breathing room.
 constexpr int kPage3StatusAboveImageY = -138;
-constexpr int kAuxTempRowY = 28;
+// Clock page (kPageIdxPreview) layout.
+constexpr int kClockTimeY = -20;
+constexpr int32_t kClockTimeScale = 800;  // ~313% of dosis_40's native size.
+constexpr int kClockRemainingRowY = kRemainingRowY;
+// Default (camera page) progress-% overlay position/size.
+constexpr int kProgressLabelDefaultY = -178;
+// Bigger + lower on the main page only (mockup #1's prominent "100%").
+constexpr int32_t kMainProgressScale = 400;  // 156% of dosis_40's native size.
+constexpr int kMainProgressY = -155;
+// Clock and self-settings pages: same (small) size as the default, just
+// nudged down so it clears the ring — it sat too close to the ring's top
+// arc at kProgressLabelDefaultY once those pages got their own content.
+constexpr int kRaisedProgressLabelY = -160;
+// Self-settings page (kPageIdxSelfSettings) brightness control layout.
+constexpr int kBrightnessBarWidth = 64;
+constexpr int kBrightnessBarHeight = 220;
+constexpr int kBrightnessBarY = -20;
+constexpr int kBrightnessLabelY = 130;
+// Main page (kPageIdxMain) layout, top to bottom: status pill -> printer-name
+// line -> nozzle/bed chip row -> remaining-time chip (kRemainingRowY, below).
+constexpr int kMainStatusY = -70;
+constexpr int kMainNameRowY = -20;
+// No larger montserrat asset is embedded, so the printer-name line is scaled
+// up in place (font-size-only change, same family/color) rather than
+// switched to a different font.
+constexpr int32_t kMainNameScale = 332;  // 130% of montserrat_20's native size.
+constexpr int kMainChipRowY = 85;
+constexpr int kAuxTempRowY = kMainChipRowY + 28;
+// Icon stays near the ring; value moved further inward (was ±95) and given
+// a fixed box (kMainChipValueBoxWidth) so the bigger dosis_40 value text
+// has a deterministic, non-overlapping boundary against the icon instead of
+// growing into it. Aux (secondary) row uses its own, wider offset since it
+// isn't paired with an icon and would otherwise collide with the opposite
+// side's value box.
+constexpr int kMainChipIconX = 150;
+constexpr int kMainChipValueX = 60;
+constexpr int kMainChipValueBoxWidth = 110;
+constexpr int kMainAuxTempX = 90;
 constexpr int kSwipeThresholdPx = 24;
 constexpr int kGestureAxisLockMarginPx = 16;
 constexpr int kBrightnessHorizontalTolerancePx = 18;
@@ -501,54 +522,6 @@ std::string optional_temperature_text(const char* label, float temperature_c, bo
   char buffer[40] = {};
   std::snprintf(buffer, sizeof(buffer), "%s %.0f%s", label, temperature_c, kDegreeC);
   return buffer;
-}
-
-bool decode_preview_png(const std::shared_ptr<std::vector<uint8_t>>& encoded_blob,
-                        std::shared_ptr<std::vector<uint8_t>>* decoded_blob,
-                        lv_image_dsc_t* image_dsc) {
-  if (!encoded_blob || encoded_blob->empty() || decoded_blob == nullptr || image_dsc == nullptr) {
-    return false;
-  }
-
-  png_image image;
-  std::memset(&image, 0, sizeof(image));
-  image.version = PNG_IMAGE_VERSION;
-
-  if (!png_image_begin_read_from_memory(&image, encoded_blob->data(), encoded_blob->size())) {
-    ESP_LOGW(kTag, "Preview PNG header decode failed");
-    return false;
-  }
-
-  image.format = PNG_FORMAT_BGRA;
-  const size_t row_stride = static_cast<size_t>(image.width) * 4U;
-  const size_t decoded_size = PNG_IMAGE_SIZE(image);
-  auto raw = std::make_shared<std::vector<uint8_t>>();
-  raw->reserve(std::max(decoded_size, kImagePersistentReserveBytes));
-  raw->resize(decoded_size);
-
-  const bool ok = png_image_finish_read(&image, nullptr, raw->data(),
-                                        static_cast<png_int_32>(row_stride), nullptr) != 0;
-  if (!ok) {
-    ESP_LOGW(kTag, "Preview PNG decode failed: %s", image.message);
-    png_image_free(&image);
-    return false;
-  }
-
-  png_image_free(&image);
-
-  std::memset(image_dsc, 0, sizeof(*image_dsc));
-  image_dsc->header.magic = LV_IMAGE_HEADER_MAGIC;
-  image_dsc->header.cf = LV_COLOR_FORMAT_ARGB8888;
-  image_dsc->header.flags = 0;
-  image_dsc->header.w = static_cast<uint16_t>(image.width);
-  image_dsc->header.h = static_cast<uint16_t>(image.height);
-  image_dsc->header.stride = static_cast<uint16_t>(row_stride);
-  image_dsc->data_size = static_cast<uint32_t>(raw->size());
-  image_dsc->data = raw->data();
-  log_blob_diag("ui preview encoded png", encoded_blob);
-  log_blob_diag("ui preview decoded raw", raw);
-  *decoded_blob = std::move(raw);
-  return true;
 }
 
 bool configure_camera_rgb565(const std::shared_ptr<std::vector<uint8_t>>& decoded_blob,
@@ -1053,55 +1026,6 @@ std::string eta_text(const PrinterSnapshot& snapshot) {
   return buffer;
 }
 
-std::string preview_note_text(const PrinterSnapshot& snapshot) {
-  if (snapshot.preview_blob && !snapshot.preview_blob->empty()) {
-    return {};  // note hidden when cover is loaded — title takes over
-  }
-  if (!snapshot.preview_url.empty()) {
-    return "Loading cloud cover";
-  }
-  if (snapshot.connection == PrinterConnectionState::kWaitingForCredentials) {
-    return "Set up printer";
-  }
-  if (!snapshot.wifi_connected) {
-    return "Printer offline";
-  }
-  if (!snapshot.cloud_detail.empty() && !snapshot.cloud_connected) {
-    return "Connecting to cloud";
-  }
-
-  switch (snapshot.lifecycle) {
-    case PrintLifecycleState::kPreparing:
-    case PrintLifecycleState::kPrinting:
-    case PrintLifecycleState::kPaused:
-      return "Preparing cover";
-    case PrintLifecycleState::kFinished:
-      return "Last print done";
-    case PrintLifecycleState::kError:
-      return "Cover unavailable";
-    case PrintLifecycleState::kIdle:
-    case PrintLifecycleState::kUnknown:
-    default:
-      return "No active print";
-  }
-}
-
-std::string preview_subnote_text(const PrinterSnapshot& snapshot) {
-  if (snapshot.print_active && !snapshot.job_name.empty()) {
-    return snapshot.job_name;
-  }
-  if (!snapshot.preview_title.empty()) {
-    return snapshot.preview_title;
-  }
-  if (!snapshot.job_name.empty()) {
-    return snapshot.job_name;
-  }
-  if (!snapshot.cloud_detail.empty()) {
-    return snapshot.cloud_detail;
-  }
-  return snapshot.preview_hint;
-}
-
 std::string camera_note_text(const PrinterSnapshot& snapshot) {
   if (snapshot.camera_blob && !snapshot.camera_blob->empty()) {
     // The camera header shares its position with the global battery overlay.
@@ -1303,7 +1227,7 @@ esp_err_t Ui::initialize() {
   applied_brightness_percent_ = -1;
   screen_power_mode_ = ScreenPowerMode::kAwake;
   last_activity_tick_ms_.store(lv_tick_get());
-  set_brightness_percent(kDefaultBrightnessPercent);
+  set_brightness_percent(initial_brightness_percent_);
   ESP_RETURN_ON_ERROR(build_dashboard(), kTag, "build_dashboard failed");
 
   // With LV_SCROLL_SNAP_NONE the pager decelerates freely after finger release.
@@ -1463,6 +1387,48 @@ int Ui::consume_printer_switch_request() {
   return val;
 }
 
+std::string Ui::active_printer_name_locked() const {
+  for (const auto& card : last_printer_cards_) {
+    if (card.active) {
+      return card.name;
+    }
+  }
+  return {};
+}
+
+bool Ui::cycle_active_printer(int direction) {
+  if (last_printer_cards_.size() <= 1) {
+    return false;  // Nothing to cycle to — vertical swipe is a no-op.
+  }
+
+  size_t active_pos = 0;
+  bool found_active = false;
+  for (size_t i = 0; i < last_printer_cards_.size(); ++i) {
+    if (last_printer_cards_[i].active) {
+      active_pos = i;
+      found_active = true;
+      break;
+    }
+  }
+  if (!found_active) {
+    active_pos = 0;
+  }
+
+  const size_t n = last_printer_cards_.size();
+  const size_t next_pos =
+      direction > 0 ? (active_pos + 1) % n : (active_pos + n - 1) % n;
+  const auto& target = last_printer_cards_[next_pos];
+  pending_printer_switch_ = target.index;
+  note_activity(true);
+
+  // Brief on-screen confirmation, reusing the same toast overlay the old
+  // vertical-brightness gesture used — cheap and already wired into the
+  // press/release lifecycle in handle_screen_event.
+  set_label_text_if_changed(brightness_overlay_,
+                            target.name.empty() ? "Switching printer..." : target.name);
+  return true;
+}
+
 void Ui::apply_page0_parallax(bool force) {
   if (page0_title_ == nullptr || page0_card_list_ == nullptr || pager_ == nullptr) {
     return;
@@ -1541,15 +1507,20 @@ void Ui::update_printer_cards(const std::vector<PrinterCardInfo>& cards) {
     }
     return true;
   };
-  if (cards_equal(cards, last_printer_cards_)) {
-    return;
-  }
-  last_printer_cards_ = cards;
-
+  // last_printer_cards_ is now also read from the LVGL/input thread (see
+  // cycle_active_printer() / active_printer_name_locked(), added for the
+  // vertical-swipe printer cycle), so the compare-and-assign must happen
+  // under the same LVGL lock those readers already run inside — previously
+  // this ran unlocked since Application::run() was the only caller/reader.
   LvglLockGuard lock(200, "update_cards");
   if (!lock.locked()) {
     return;
   }
+
+  if (cards_equal(cards, last_printer_cards_)) {
+    return;
+  }
+  last_printer_cards_ = cards;
 
   rebuild_printer_cards_locked(cards);
 }
@@ -1724,25 +1695,6 @@ void Ui::apply_snapshot(const PrinterSnapshot& snapshot) {
     return;
   }
 
-  // Pre-decode preview PNG outside LVGL lock, but only when the preview page is
-  // actually active. The decoded cover is ~1 MB, lives in PSRAM, and is kept
-  // cached across page changes so navigating away doesn't create a decode storm.
-  std::shared_ptr<std::vector<uint8_t>> pre_decoded_raw;
-  lv_image_dsc_t pre_decoded_dsc{};
-  const bool preview_page_active = !scrolling_ && active_page_ == kPageIdxPreview;
-  const bool preview_blob_changed =
-      snapshot.preview_blob && !snapshot.preview_blob->empty() &&
-      last_preview_blob_.get() != snapshot.preview_blob.get();
-  // Also pre-decode when the blob exists but hasn't been decoded yet (e.g.
-  // blob arrived while another page was active, then user scrolled to preview).
-  const bool needs_first_decode =
-      !preview_blob_changed && snapshot.preview_blob &&
-      !snapshot.preview_blob->empty() &&
-      (!last_preview_raw_ || last_preview_raw_->empty());
-  if (preview_page_active && (preview_blob_changed || needs_first_decode)) {
-    decode_preview_png(snapshot.preview_blob, &pre_decoded_raw, &pre_decoded_dsc);
-  }
-
   LvglLockGuard lock(500, "apply_snapshot");
   if (!lock.locked()) {
     return;
@@ -1755,8 +1707,7 @@ void Ui::apply_snapshot(const PrinterSnapshot& snapshot) {
     return;
   }
 
-  apply_snapshot_locked(snapshot, false,
-                        std::move(pre_decoded_raw), &pre_decoded_dsc);
+  apply_snapshot_locked(snapshot, false);
 }
 
 void Ui::apply_ring_visual_locked(const PrinterSnapshot& snapshot) {
@@ -1851,48 +1802,7 @@ void Ui::apply_ring_visual_locked(const PrinterSnapshot& snapshot) {
   }
 }
 
-bool Ui::ensure_preview_image_loaded_locked(
-    bool force_reload,
-    std::shared_ptr<std::vector<uint8_t>> pre_decoded_raw,
-    const lv_image_dsc_t* pre_decoded_dsc) {
-  if (force_reload) {
-    release_preview_image_locked();
-  }
-
-  if (last_preview_raw_ && !last_preview_raw_->empty()) {
-    // Source is already installed for this decoded blob. Re-setting it on
-    // every status tick invalidates the full 320px image and can starve other
-    // tasks trying to acquire the LVGL lock.
-    return true;
-  }
-
-  // Use pre-decoded data when available (decoded outside LVGL lock).
-  if (pre_decoded_raw && !pre_decoded_raw->empty() && pre_decoded_dsc != nullptr) {
-    last_preview_raw_ = std::move(pre_decoded_raw);
-    preview_image_dsc_ = *pre_decoded_dsc;
-    lv_image_set_src(page2_image_, &preview_image_dsc_);
-    log_blob_diag("ui preview set_src raw", last_preview_raw_);
-    return true;
-  }
-
-  // No fallback decode under lock — pre-decode happens outside the LVGL
-  // lock in apply_snapshot().  If we reach here without decoded data the
-  // image will appear on the next snapshot tick (~500 ms).
-  return false;
-}
-
-void Ui::release_preview_image_locked() {
-  if (page2_image_ != nullptr) {
-    lv_image_set_src(page2_image_, nullptr);
-  }
-  lv_image_cache_drop(&preview_image_dsc_);
-  last_preview_raw_.reset();
-  std::memset(&preview_image_dsc_, 0, sizeof(preview_image_dsc_));
-}
-
-void Ui::apply_snapshot_locked(const PrinterSnapshot& snapshot, bool force_ring_refresh,
-                               std::shared_ptr<std::vector<uint8_t>> pre_decoded_raw,
-                               const lv_image_dsc_t* pre_decoded_dsc) {
+void Ui::apply_snapshot_locked(const PrinterSnapshot& snapshot, bool force_ring_refresh) {
   LvglLockGuard::note_phase("enter");
   deferred_snapshot_pending_ = false;
   update_page_availability_locked(snapshot);
@@ -1924,7 +1834,14 @@ void Ui::apply_snapshot_locked(const PrinterSnapshot& snapshot, bool force_ring_
   const std::string status_text = lifecycle_label(snapshot);
   set_label_text_if_changed(status_label_, status_text);
 
-  const std::string detail = detail_text(snapshot);
+  // detail_text() covers errors / HMS warnings / current job name — anything
+  // that needs the user's attention. When none of those apply (e.g. idle,
+  // wifi briefly dropped outside of setup mode) fall back to showing the
+  // active printer's configured name instead of leaving the line blank.
+  std::string detail = detail_text(snapshot);
+  if (detail.empty()) {
+    detail = active_printer_name_locked();
+  }
 
   // [DIAG] Log what the display is actually showing — on change only.
   if (status_text != last_diag_status_ || detail != last_diag_detail_ ||
@@ -2071,58 +1988,25 @@ void Ui::apply_snapshot_locked(const PrinterSnapshot& snapshot, bool force_ring_
     apply_ams_error_pulse_locked();
   }
 
-  LvglLockGuard::note_phase("preview_text");
-  const std::string preview_note = preview_note_text(snapshot);
-  const std::string preview_subnote = preview_subnote_text(snapshot);
+  LvglLockGuard::note_phase("clock");
   const std::string camera_note = camera_note_text(snapshot);
   const std::string camera_subnote = camera_subnote_text(snapshot);
-  bool has_preview_image = false;
-  if (snapshot.preview_blob && !snapshot.preview_blob->empty()) {
-    const bool preview_blob_changed = last_preview_blob_.get() != snapshot.preview_blob.get();
-    last_preview_blob_ = snapshot.preview_blob;
-    if (active_page_ == kPageIdxPreview) {
-      LvglLockGuard::note_phase("preview_image_load");
-      has_preview_image = ensure_preview_image_loaded_locked(
-          preview_blob_changed, std::move(pre_decoded_raw), pre_decoded_dsc);
-    } else if (preview_blob_changed) {
-      release_preview_image_locked();
-    }
-  } else {
-    if (last_preview_blob_ || last_preview_raw_) {
-      release_preview_image_locked();
-    }
-    last_preview_blob_.reset();
-  }
-  const bool has_page2_image = has_preview_image;
-  preview_image_visible_ = has_page2_image;
-
-  if (preview_text_image_mode_ != has_page2_image) {
-    if (has_page2_image) {
-      // Note is hidden when cover is loaded; subnote (title) moves to former note position.
-      lv_obj_align(page2_subnote_, LV_ALIGN_CENTER, 0, kPage2NoteWithImageY);
-    } else {
-      lv_obj_align(page2_note_, LV_ALIGN_CENTER, 0, -14);
-      lv_obj_align(page2_subnote_, LV_ALIGN_CENTER, 0, 18);
-    }
-    preview_text_image_mode_ = has_page2_image;
-  }
-  set_hidden(page2_note_, preview_note.empty());
-  if (!preview_note.empty()) {
-    set_label_text_if_changed(page2_note_, preview_note);
-  }
-  set_hidden(page2_subnote_, preview_subnote.empty());
-  if (!preview_subnote.empty()) {
-    set_label_text_if_changed(page2_subnote_, preview_subnote);
-  }
-  // Avoid LV_LABEL_LONG_SCROLL_CIRCULAR here. It is a permanent LVGL animation
-  // and on the preview page it competes with large image redraws under the
-  // display lock. Use a static dotted title instead.
   {
-    const bool image_title = active_page_ == kPageIdxPreview && has_page2_image;
-    const lv_label_long_mode_t desired = image_title ? LV_LABEL_LONG_DOT : LV_LABEL_LONG_WRAP;
-    if (lv_label_get_long_mode(page2_subnote_) != desired) {
-      lv_label_set_long_mode(page2_subnote_, desired);
+    // Big HH:MM clock + small remaining-time chip, mirroring the main page's
+    // remaining row. "--:--" placeholder until SNTP has synced (same
+    // year-2024 heuristic already used for the ETA row — see eta_text()).
+    std::string clock_text = "--:--";
+    const std::time_t now = std::time(nullptr);
+    if (now >= 1700000000) {
+      std::tm local{};
+      if (localtime_r(&now, &local) != nullptr) {
+        char buf[8] = {};
+        std::snprintf(buf, sizeof(buf), "%02d:%02d", local.tm_hour, local.tm_min);
+        clock_text = buf;
+      }
     }
+    set_label_text_if_changed(page2_time_label_, clock_text);
+    set_label_text_if_changed(page2_remaining_label_, remaining_text(snapshot));
   }
 
   update_print_buttons_locked(snapshot);
@@ -2793,10 +2677,12 @@ esp_err_t Ui::build_dashboard() {
   page1_ = create_page(pager_);
   page2_ = create_page(pager_);
   page3_ = create_page(pager_);
+  page4_ = create_page(pager_);
   enable_touch_bubble(page0_);
   enable_touch_bubble(page1_);
   enable_touch_bubble(page2_);
   enable_touch_bubble(page3_);
+  enable_touch_bubble(page4_);
 
   // --- Page 0: printer selection ---
   page0_title_ = lv_label_create(page0_);
@@ -2873,7 +2759,12 @@ esp_err_t Ui::build_dashboard() {
   set_label_text_if_changed(progress_label_, "--%");
   lv_obj_set_style_text_font(progress_label_, dosis40, 0);
   lv_obj_set_style_text_color(progress_label_, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_align(progress_label_, LV_ALIGN_CENTER, 0, -178);
+  // Pivot must be the label's own center so apply_page_visibility() can grow
+  // it on the main page (see kMainProgressScale) without throwing off this
+  // centered alignment (LVGL's default pivot is the top-left corner).
+  lv_obj_set_style_transform_pivot_x(progress_label_, LV_PCT(50), 0);
+  lv_obj_set_style_transform_pivot_y(progress_label_, LV_PCT(50), 0);
+  lv_obj_align(progress_label_, LV_ALIGN_CENTER, 0, kProgressLabelDefaultY);
   apply_display_rotation_visual_offset(progress_label_, display_rotation_);
   lv_obj_move_foreground(progress_label_);
 
@@ -2922,9 +2813,9 @@ esp_err_t Ui::build_dashboard() {
 
   status_label_ = lv_label_create(page1_);
   set_label_text_if_changed(status_label_, "waiting...");
-  lv_obj_set_style_text_font(status_label_, dosis32, 0);
+  lv_obj_set_style_text_font(status_label_, dosis40, 0);
   lv_obj_set_style_text_color(status_label_, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_align(status_label_, LV_ALIGN_CENTER, 0, -86);
+  lv_obj_align(status_label_, LV_ALIGN_CENTER, 0, kMainStatusY);
 
   detail_label_ = lv_label_create(page1_);
   set_label_text_if_changed(detail_label_, "Waiting for printer data");
@@ -2933,7 +2824,11 @@ esp_err_t Ui::build_dashboard() {
   lv_obj_set_style_text_align(detail_label_, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_font(detail_label_, info20, 0);
   lv_obj_set_style_text_color(detail_label_, lv_color_hex(0x94A3B8), 0);
-  lv_obj_align(detail_label_, LV_ALIGN_CENTER, 0, 114);
+  lv_obj_set_style_transform_pivot_x(detail_label_, LV_PCT(50), 0);
+  lv_obj_set_style_transform_pivot_y(detail_label_, LV_PCT(50), 0);
+  lv_obj_set_style_transform_scale_x(detail_label_, kMainNameScale, 0);
+  lv_obj_set_style_transform_scale_y(detail_label_, kMainNameScale, 0);
+  lv_obj_align(detail_label_, LV_ALIGN_CENTER, 0, kMainNameRowY);
 
   layer_row_ = lv_obj_create(page1_);
   make_transparent(layer_row_);
@@ -2975,13 +2870,18 @@ esp_err_t Ui::build_dashboard() {
   set_label_text_if_changed(nozzle_prefix_label_, kMdiNozzle);
   lv_obj_set_style_text_font(nozzle_prefix_label_, mdi40, 0);
   lv_obj_set_style_text_color(nozzle_prefix_label_, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_align(nozzle_prefix_label_, LV_ALIGN_CENTER, -182, -10);
+  lv_obj_align(nozzle_prefix_label_, LV_ALIGN_CENTER, -kMainChipIconX, kMainChipRowY);
 
   nozzle_value_label_ = lv_label_create(page1_);
   set_label_text_if_changed(nozzle_value_label_, "--°C");
-  lv_obj_set_style_text_font(nozzle_value_label_, dosis32, 0);
+  lv_obj_set_style_text_font(nozzle_value_label_, dosis40, 0);
   lv_obj_set_style_text_color(nozzle_value_label_, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_align(nozzle_value_label_, LV_ALIGN_CENTER, -132, -10);
+  // Fixed box (mirrors bed_value_label_ below) so the bigger font has a
+  // deterministic boundary instead of a content-sized box that could grow
+  // into the icon. Left-aligned: digits hug the icon, which sits to the left.
+  lv_obj_set_width(nozzle_value_label_, kMainChipValueBoxWidth);
+  lv_obj_set_style_text_align(nozzle_value_label_, LV_TEXT_ALIGN_LEFT, 0);
+  lv_obj_align(nozzle_value_label_, LV_ALIGN_CENTER, -kMainChipValueX, kMainChipRowY);
   set_label_text_if_changed(nozzle_value_label_, std::string("--") + kDegreeC);
 
   nozzle_aux_label_ = lv_label_create(page1_);
@@ -2991,22 +2891,24 @@ esp_err_t Ui::build_dashboard() {
   lv_obj_set_style_text_align(nozzle_aux_label_, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_font(nozzle_aux_label_, dosis20, 0);
   lv_obj_set_style_text_color(nozzle_aux_label_, lv_color_hex(0x94A3B8), 0);
-  lv_obj_align(nozzle_aux_label_, LV_ALIGN_CENTER, -132, kAuxTempRowY);
+  lv_obj_align(nozzle_aux_label_, LV_ALIGN_CENTER, -kMainAuxTempX, kAuxTempRowY);
   lv_obj_add_flag(nozzle_aux_label_, LV_OBJ_FLAG_HIDDEN);
 
   bed_prefix_label_ = lv_label_create(page1_);
   set_label_text_if_changed(bed_prefix_label_, kMdiBed);
   lv_obj_set_style_text_font(bed_prefix_label_, mdi40, 0);
   lv_obj_set_style_text_color(bed_prefix_label_, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_align(bed_prefix_label_, LV_ALIGN_CENTER, 182, -10);
+  lv_obj_align(bed_prefix_label_, LV_ALIGN_CENTER, kMainChipIconX, kMainChipRowY);
 
   bed_value_label_ = lv_label_create(page1_);
   set_label_text_if_changed(bed_value_label_, "--°C");
-  lv_obj_set_style_text_font(bed_value_label_, dosis32, 0);
+  lv_obj_set_style_text_font(bed_value_label_, dosis40, 0);
   lv_obj_set_style_text_color(bed_value_label_, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_set_width(bed_value_label_, 96);
+  // Widened from 96 to kMainChipValueBoxWidth for the bigger dosis_40 font
+  // (was clipping/crowding "°C" against the icon at the old, narrower box).
+  lv_obj_set_width(bed_value_label_, kMainChipValueBoxWidth);
   lv_obj_set_style_text_align(bed_value_label_, LV_TEXT_ALIGN_RIGHT, 0);
-  lv_obj_align(bed_value_label_, LV_ALIGN_CENTER, 108, -10);
+  lv_obj_align(bed_value_label_, LV_ALIGN_CENTER, kMainChipValueX, kMainChipRowY);
   set_label_text_if_changed(bed_value_label_, std::string("--") + kDegreeC);
 
   bed_aux_label_ = lv_label_create(page1_);
@@ -3016,15 +2918,18 @@ esp_err_t Ui::build_dashboard() {
   lv_obj_set_style_text_align(bed_aux_label_, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_font(bed_aux_label_, dosis20, 0);
   lv_obj_set_style_text_color(bed_aux_label_, lv_color_hex(0x94A3B8), 0);
-  lv_obj_align(bed_aux_label_, LV_ALIGN_CENTER, 132, kAuxTempRowY);
+  lv_obj_align(bed_aux_label_, LV_ALIGN_CENTER, kMainAuxTempX, kAuxTempRowY);
   lv_obj_add_flag(bed_aux_label_, LV_OBJ_FLAG_HIDDEN);
 
   remaining_row_ = lv_obj_create(page1_);
   make_transparent(remaining_row_);
-  lv_obj_set_size(remaining_row_, 280, LV_SIZE_CONTENT);
+  lv_obj_set_size(remaining_row_, kRemainingRowWidth, LV_SIZE_CONTENT);
   lv_obj_set_flex_flow(remaining_row_, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(remaining_row_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                         LV_FLEX_ALIGN_CENTER);
+  // No horizontal nudge — the earlier leftward offset overcorrected (the
+  // "shifted right" read was likely an artifact of the row sitting too
+  // close to the ring at the old, lower Y; true center reads fine now).
   lv_obj_align(remaining_row_, LV_ALIGN_CENTER, 0, kRemainingRowY);
   lv_obj_clear_flag(remaining_row_, LV_OBJ_FLAG_SCROLLABLE);
   // Tap to toggle between remaining duration and predicted finish time.
@@ -3049,7 +2954,11 @@ esp_err_t Ui::build_dashboard() {
   lv_obj_set_style_text_align(portal_hint_label_, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_font(portal_hint_label_, info20, 0);
   lv_obj_set_style_text_color(portal_hint_label_, lv_color_hex(0x64748B), 0);
-  lv_obj_align(portal_hint_label_, LV_ALIGN_CENTER, 0, 114);
+  lv_obj_set_style_transform_pivot_x(portal_hint_label_, LV_PCT(50), 0);
+  lv_obj_set_style_transform_pivot_y(portal_hint_label_, LV_PCT(50), 0);
+  lv_obj_set_style_transform_scale_x(portal_hint_label_, kMainNameScale, 0);
+  lv_obj_set_style_transform_scale_y(portal_hint_label_, kMainNameScale, 0);
+  lv_obj_align(portal_hint_label_, LV_ALIGN_CENTER, 0, kMainNameRowY);
   lv_obj_add_flag(portal_hint_label_, LV_OBJ_FLAG_HIDDEN);
 
   brightness_overlay_ = lv_label_create(lv_layer_top());
@@ -3107,35 +3016,45 @@ esp_err_t Ui::build_dashboard() {
 
   page2_shell_ = nullptr;
 
-  page2_image_ = lv_image_create(page2_);
-  lv_obj_set_size(page2_image_, kPage2PreviewSize, kPage2PreviewSize);
-  lv_image_set_inner_align(page2_image_, LV_IMAGE_ALIGN_CONTAIN);
-  lv_obj_align(page2_image_, LV_ALIGN_CENTER, 0, kPage2PreviewYOffset);
-  lv_obj_add_flag(page2_image_, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_clear_flag(page2_image_, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_clear_flag(page2_image_, LV_OBJ_FLAG_SCROLLABLE);
-  enable_touch_bubble(page2_image_);
+  // --- Page 2: clock (formerly the cloud-cover preview) ---
+  page2_time_label_ = lv_label_create(page2_);
+  set_label_text_if_changed(page2_time_label_, "--:--");
+  lv_obj_set_style_text_font(page2_time_label_, dosis40, 0);
+  lv_obj_set_style_text_color(page2_time_label_, lv_color_hex(0xFFFFFF), 0);
+  // Scale the largest available font up so the digits read like the mockup's
+  // big centered clock, without introducing a new font asset. LVGL's default
+  // transform pivot is the object's top-left corner, so scaling without an
+  // explicit pivot grows the label toward the bottom-right and throws off
+  // the centered alignment below — pin the pivot to the label's own center.
+  lv_obj_set_style_transform_pivot_x(page2_time_label_, LV_PCT(50), 0);
+  lv_obj_set_style_transform_pivot_y(page2_time_label_, LV_PCT(50), 0);
+  lv_obj_set_style_transform_scale_x(page2_time_label_, kClockTimeScale, 0);
+  lv_obj_set_style_transform_scale_y(page2_time_label_, kClockTimeScale, 0);
+  lv_obj_align(page2_time_label_, LV_ALIGN_CENTER, 0, kClockTimeY);
+  enable_touch_bubble(page2_time_label_);
 
-  page2_note_ = lv_label_create(page2_);
-  set_label_text_if_changed(page2_note_, "No cover image yet");
-  lv_obj_set_width(page2_note_, 280);
-  lv_label_set_long_mode(page2_note_, LV_LABEL_LONG_WRAP);
-  lv_obj_set_style_text_align(page2_note_, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(page2_note_, dosis20, 0);
-  lv_obj_set_style_text_color(page2_note_, lv_color_hex(0x888888), 0);
-  lv_obj_align(page2_note_, LV_ALIGN_CENTER, 0, -14);
-  enable_touch_bubble(page2_note_);
+  page2_remaining_row_ = lv_obj_create(page2_);
+  make_transparent(page2_remaining_row_);
+  lv_obj_set_size(page2_remaining_row_, kRemainingRowWidth, LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(page2_remaining_row_, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(page2_remaining_row_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
+  // No horizontal nudge — see the matching comment on the main page's
+  // remaining_row_ for why the earlier leftward offset was reverted.
+  lv_obj_align(page2_remaining_row_, LV_ALIGN_CENTER, 0, kClockRemainingRowY);
+  lv_obj_clear_flag(page2_remaining_row_, LV_OBJ_FLAG_SCROLLABLE);
+  enable_touch_bubble(page2_remaining_row_);
 
-  page2_subnote_ = lv_label_create(page2_);
-  set_label_text_if_changed(page2_subnote_, "");
-  lv_obj_set_width(page2_subnote_, 320);
-  lv_label_set_long_mode(page2_subnote_, LV_LABEL_LONG_WRAP);
-  lv_obj_set_style_text_align(page2_subnote_, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(page2_subnote_, info20, 0);
-  lv_obj_set_style_text_color(page2_subnote_, lv_color_hex(0x888888), 0);
-  lv_obj_align(page2_subnote_, LV_ALIGN_CENTER, 0, 18);
-  lv_obj_add_flag(page2_subnote_, LV_OBJ_FLAG_HIDDEN);
-  enable_touch_bubble(page2_subnote_);
+  page2_remaining_prefix_label_ = lv_label_create(page2_remaining_row_);
+  set_label_text_if_changed(page2_remaining_prefix_label_, kMdiClock);
+  lv_obj_set_style_text_font(page2_remaining_prefix_label_, mdi40, 0);
+  lv_obj_set_style_text_color(page2_remaining_prefix_label_, lv_color_hex(0x87CEEB), 0);
+  lv_obj_set_style_pad_right(page2_remaining_prefix_label_, 8, 0);
+
+  page2_remaining_label_ = lv_label_create(page2_remaining_row_);
+  set_label_text_if_changed(page2_remaining_label_, "--m");
+  lv_obj_set_style_text_font(page2_remaining_label_, dosis40, 0);
+  lv_obj_set_style_text_color(page2_remaining_label_, lv_color_hex(0x87CEEB), 0);
 
   // Print-control buttons (pause/resume + stop). Only compiled in when the
   // experimental print-control feature is enabled via Kconfig. See the help
@@ -3212,6 +3131,44 @@ esp_err_t Ui::build_dashboard() {
   lv_obj_add_flag(page3_subnote_, LV_OBJ_FLAG_HIDDEN);
   enable_touch_bubble(page3_subnote_);
 
+  // --- Page 4: self settings (display brightness) ---
+  brightness_track_ = lv_obj_create(page4_);
+  lv_obj_set_size(brightness_track_, kBrightnessBarWidth, kBrightnessBarHeight);
+  lv_obj_set_style_radius(brightness_track_, kBrightnessBarWidth / 2, 0);
+  lv_obj_set_style_bg_color(brightness_track_, lv_color_hex(0x1A1A1A), 0);
+  lv_obj_set_style_bg_opa(brightness_track_, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(brightness_track_, lv_color_hex(0x444444), 0);
+  lv_obj_set_style_border_width(brightness_track_, 2, 0);
+  lv_obj_set_style_pad_all(brightness_track_, 0, 0);
+  lv_obj_set_style_clip_corner(brightness_track_, true, 0);
+  lv_obj_align(brightness_track_, LV_ALIGN_CENTER, 0, kBrightnessBarY);
+  lv_obj_clear_flag(brightness_track_, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(brightness_track_, LV_OBJ_FLAG_CLICKABLE);
+  enable_touch_bubble(brightness_track_);
+
+  // Fill grows from the bottom of the track. Height is set per current
+  // brightness by apply_brightness_fill_locked().
+  brightness_fill_ = lv_obj_create(brightness_track_);
+  lv_obj_set_size(brightness_fill_, kBrightnessBarWidth, 0);
+  lv_obj_set_style_radius(brightness_fill_, kBrightnessBarWidth / 2, 0);
+  // Reuses the existing ring/accent color so the control matches the rest of
+  // the UI instead of introducing a new color.
+  lv_obj_set_style_bg_color(brightness_fill_, lv_color_hex(arc_colors_.printing), 0);
+  lv_obj_set_style_bg_opa(brightness_fill_, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(brightness_fill_, 0, 0);
+  lv_obj_set_style_pad_all(brightness_fill_, 0, 0);
+  lv_obj_align(brightness_fill_, LV_ALIGN_BOTTOM_MID, 0, 0);
+  lv_obj_clear_flag(brightness_fill_, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(brightness_fill_, LV_OBJ_FLAG_CLICKABLE);
+  enable_touch_bubble(brightness_fill_);
+
+  settings_brightness_label_ = lv_label_create(page4_);
+  set_label_text_if_changed(settings_brightness_label_, "--%");
+  lv_obj_set_style_text_font(settings_brightness_label_, dosis32, 0);
+  lv_obj_set_style_text_color(settings_brightness_label_, lv_color_hex(0xFFFFFF), 0);
+  lv_obj_align(settings_brightness_label_, LV_ALIGN_CENTER, 0, kBrightnessLabelY);
+  enable_touch_bubble(settings_brightness_label_);
+
   lv_obj_add_event_cb(screen_, &Ui::screen_event_cb, LV_EVENT_ALL, this);
   lv_obj_update_layout(pager_);
   lv_obj_scroll_to_view(page1_, LV_ANIM_OFF);
@@ -3222,10 +3179,10 @@ esp_err_t Ui::build_dashboard() {
   deferred_snapshot_pending_ = false;
   detail_visible_ = true;
   show_logo_ = false;
-  preview_text_image_mode_ = false;
   camera_text_image_mode_ = false;
   apply_page_visibility();
   update_portal_access_visuals_locked();
+  apply_brightness_fill_locked();
 
   return ESP_OK;
 }
@@ -3241,7 +3198,37 @@ void Ui::apply_page_visibility() {
   const bool on_page1 = !scrolling_ ? (active_page_ == kPageIdxMain) : true;
   const bool on_page2 = !scrolling_ ? (active_page_ == kPageIdxPreview) : true;
   const bool on_page3 = !scrolling_ ? (active_page_ == kPageIdxCamera) : true;
+  const bool on_page4 = !scrolling_ ? (active_page_ == kPageIdxSelfSettings) : true;
   const bool settled_page1 = !scrolling_ && active_page_ == kPageIdxMain;
+
+  // The shared progress-% overlay has three looks: bigger + lower on the
+  // main page, small but nudged down on the clock/settings pages (clears
+  // the ring now that those pages have their own content), and the
+  // original small/high position everywhere else (camera page). Only
+  // restyle on an actual settle transition, not every call.
+  const bool settled_raised_page =
+      !scrolling_ && (active_page_ == kPageIdxPreview || active_page_ == kPageIdxSelfSettings);
+  const int desired_progress_style = settled_page1 ? 1 : (settled_raised_page ? 2 : 0);
+  if (desired_progress_style != progress_label_style_) {
+    progress_label_style_ = desired_progress_style;
+    switch (desired_progress_style) {
+      case 1:
+        lv_obj_set_style_transform_scale_x(progress_label_, kMainProgressScale, 0);
+        lv_obj_set_style_transform_scale_y(progress_label_, kMainProgressScale, 0);
+        lv_obj_align(progress_label_, LV_ALIGN_CENTER, 0, kMainProgressY);
+        break;
+      case 2:
+        lv_obj_set_style_transform_scale_x(progress_label_, LV_SCALE_NONE, 0);
+        lv_obj_set_style_transform_scale_y(progress_label_, LV_SCALE_NONE, 0);
+        lv_obj_align(progress_label_, LV_ALIGN_CENTER, 0, kRaisedProgressLabelY);
+        break;
+      default:
+        lv_obj_set_style_transform_scale_x(progress_label_, LV_SCALE_NONE, 0);
+        lv_obj_set_style_transform_scale_y(progress_label_, LV_SCALE_NONE, 0);
+        lv_obj_align(progress_label_, LV_ALIGN_CENTER, 0, kProgressLabelDefaultY);
+        break;
+    }
+  }
   // These labels live on lv_layer_top(), so the pager cannot clip them.  The
   // camera header uses the same position: on battery power (including while
   // charging) show the battery indicator there; on USB-only power show the
@@ -3259,11 +3246,13 @@ void Ui::apply_page_visibility() {
       set_hidden(ams_pages_[u], !ams_unit_present_[u]);
     }
   }
-  set_hidden(page2_, !preview_page_available_);
   set_hidden(page3_, !camera_page_available_);
   set_hidden(status_label_, !on_page1);
   set_hidden(detail_label_, !on_page1 || !detail_visible_ || show_portal_hint);
-  set_hidden(layer_row_, !on_page1);
+  // Layer/filament-weight row has no slot in the reworked main-page layout
+  // (mockup #1: %, status, printer name, nozzle/bed chips, remaining chip).
+  // Kept built (harmless) but permanently hidden rather than removed.
+  set_hidden(layer_row_, true);
   set_hidden(battery_icon_label_, !show_battery_overlay);
   set_hidden(battery_pct_label_, !show_battery_overlay);
   set_hidden(nozzle_prefix_label_, !on_page1);
@@ -3275,8 +3264,11 @@ void Ui::apply_page_visibility() {
   set_hidden(remaining_row_, !on_page1);
   set_hidden(badge_slot_, !on_page1);
   set_hidden(portal_hint_label_, !show_portal_hint);
-  set_hidden(page2_image_, !on_page2 || !preview_image_visible_);
+  set_hidden(page2_time_label_, !on_page2);
+  set_hidden(page2_remaining_row_, !on_page2);
   set_hidden(page3_image_, !on_page3 || !camera_image_visible_);
+  set_hidden(brightness_track_, !on_page4);
+  set_hidden(settings_brightness_label_, !on_page4);
 
   // Overlay + page0 opacity are driven by apply_page0_parallax.
   // When not scrolling, snap to final state.
@@ -3289,18 +3281,14 @@ void Ui::apply_page_visibility() {
 }
 
 void Ui::apply_logo_visibility() {
-  // badge_slot_ is a child of page1_ so it clips naturally during scroll.
-  const bool show_badge_slot = scrolling_ || active_page_ == kPageIdxMain;
-  if (!show_badge_slot) {
-    set_hidden(logo_badge_, true);
-    return;
-  }
-
-  set_hidden(logo_badge_, !show_logo_);
+  // The Bambu Lab logo badge is removed from the reworked main page layout
+  // (the mockup has no logo — that center slot is now the printer-name
+  // line). This also removes the tap-to-toggle chamber-light affordance the
+  // badge doubled as; there is no replacement control for that on page1.
+  set_hidden(logo_badge_, true);
 }
 
 void Ui::update_page_availability_locked(const PrinterSnapshot& snapshot) {
-  const bool preview_available = snapshot.preview_page_available;
   const bool camera_available = snapshot.camera_page_available;
   const uint8_t ams_count = snapshot.ams ? snapshot.ams->count : 0;
   bool ams_changed = false;
@@ -3311,11 +3299,8 @@ void Ui::update_page_availability_locked(const PrinterSnapshot& snapshot) {
       ams_changed = true;
     }
   }
-  const bool availability_changed =
-      preview_page_available_ != preview_available || camera_page_available_ != camera_available ||
-      ams_changed;
+  const bool availability_changed = camera_page_available_ != camera_available || ams_changed;
 
-  preview_page_available_ = preview_available;
   camera_page_available_ = camera_available;
 
   if (!availability_changed) {
@@ -3327,13 +3312,7 @@ void Ui::update_page_availability_locked(const PrinterSnapshot& snapshot) {
       set_hidden(ams_pages_[u], !ams_unit_present_[u]);
     }
   }
-  set_hidden(page2_, !preview_page_available_);
   set_hidden(page3_, !camera_page_available_);
-
-  if (!preview_page_available_) {
-    release_preview_image_locked();
-    preview_image_visible_ = false;
-  }
 
   if (!camera_page_available_) {
     if (camera_slot_initialized_ && page3_image_ != nullptr) {
@@ -3374,10 +3353,15 @@ bool Ui::page_enabled(int page) const {
     return true;
   }
   if (page == kPageIdxPreview) {
-    return preview_page_available_;
+    // Clock page — always available, unlike the cloud-cover preview it
+    // replaced (which needed cloud connectivity / non-Local-Only mode).
+    return true;
   }
   if (page == kPageIdxCamera) {
     return camera_page_available_;
+  }
+  if (page == kPageIdxSelfSettings) {
+    return true;
   }
   return false;
 }
@@ -3397,6 +3381,9 @@ lv_obj_t* Ui::page_object(int page) const {
   }
   if (page == kPageIdxCamera) {
     return page3_;
+  }
+  if (page == kPageIdxSelfSettings) {
+    return page4_;
   }
   return nullptr;
 }
@@ -3474,9 +3461,6 @@ void Ui::set_active_page(int page) {
   active_page_ = clamped_page;
   if (clamped_page == 0 && previous_page != 0) {
     replay_card_animations_locked();
-  }
-  if (active_page_ == kPageIdxPreview) {
-    preview_image_visible_ = ensure_preview_image_loaded_locked(false);
   }
   if (previous_page != clamped_page && active_page_ == kPageIdxCamera &&
       camera_page_available_) {
@@ -3648,14 +3632,22 @@ void Ui::handle_screen_event(lv_event_t* event) {
       return;
     }
 
+    // Vertical swipe means brightness on the self-settings page (Change 4);
+    // everywhere else (including AMS/clock/camera pages) it cycles the active
+    // printer instead (Change 1). The printer-select page keeps its own
+    // vertical-scrolling card list + tap-to-switch, so it opts out entirely.
+    const bool on_settings_page = active_page_ == kPageIdxSelfSettings;
+    const bool vertical_gesture_allowed = active_page_ != kPageIdxPrinterSelect;
+
     if (!overlay_visible_) {
       // Resolve the gesture once: either a horizontal page swipe or a mostly
-      // vertical brightness drag. This avoids accidental brightness changes
-      // while the finger is moving diagonally during page navigation.
+      // vertical drag. This avoids accidental triggers while the finger is
+      // moving diagonally during page navigation.
       const bool horizontal_swipe =
           abs_dx >= kSwipeThresholdPx &&
           abs_dx >= (abs_dy - kGestureAxisLockMarginPx);
-      const bool vertical_brightness =
+      const bool vertical_gesture =
+          vertical_gesture_allowed &&
           abs_dy >= kSwipeThresholdPx &&
           abs_dx <= kBrightnessHorizontalTolerancePx &&
           abs_dy >= (abs_dx + kGestureAxisLockMarginPx);
@@ -3664,11 +3656,32 @@ void Ui::handle_screen_event(lv_event_t* event) {
         swipe_switched_ = true;
         return;
       }
-      if (!vertical_brightness) {
+      if (!vertical_gesture) {
         return;
       }
 
-      set_pager_scroll_locked(true);
+      if (on_settings_page) {
+        set_pager_scroll_locked(true);
+      } else {
+        // Printer switch is a discrete, one-shot action (unlike the
+        // continuous brightness drag below): fire it once as soon as the
+        // gesture resolves as vertical, then ignore further finger movement
+        // until release. Swipe up = next printer, down = previous — mirrors
+        // "up" meaning "increase" on this same axis for brightness.
+        // Only pop the confirmation toast when a switch actually happened —
+        // otherwise (fewer than two printers configured) this must be a
+        // silent no-op, not a stale/misleading overlay.
+        if (cycle_active_printer(dy > 0 ? 1 : -1)) {
+          lv_obj_clear_flag(brightness_overlay_, LV_OBJ_FLAG_HIDDEN);
+          overlay_visible_ = true;
+        }
+        return;
+      }
+    }
+
+    if (!on_settings_page) {
+      // Printer switch already fired above; nothing continuous to do here.
+      return;
     }
 
     const float delta = static_cast<float>(dy) * (100.0f / 250.0f);
@@ -3707,6 +3720,12 @@ void Ui::handle_screen_event(lv_event_t* event) {
     if (overlay_visible_) {
       lv_obj_add_flag(brightness_overlay_, LV_OBJ_FLAG_HIDDEN);
       overlay_visible_ = false;
+      // Only the settings-page branch drives continuous brightness changes;
+      // persist once the drag settles rather than on every intermediate
+      // value (see consume_brightness_save_request()).
+      if (active_page_ == kPageIdxSelfSettings) {
+        brightness_save_pending_ = true;
+      }
       return;
     }
     if (swipe_locked) {
@@ -3841,6 +3860,36 @@ void Ui::set_brightness_percent(int brightness_percent) {
 
   user_brightness_percent_ = clamped;
   apply_brightness_policy();
+  apply_brightness_fill_locked();
+}
+
+void Ui::set_initial_brightness_percent(int percent) {
+  initial_brightness_percent_ = std::clamp(percent, kManualMinBrightnessPercent, 100);
+}
+
+bool Ui::consume_brightness_save_request(int* out_percent) {
+  if (!brightness_save_pending_) {
+    return false;
+  }
+  brightness_save_pending_ = false;
+  if (out_percent != nullptr) {
+    *out_percent = user_brightness_percent_;
+  }
+  return true;
+}
+
+void Ui::apply_brightness_fill_locked() {
+  if (brightness_fill_ == nullptr || settings_brightness_label_ == nullptr) {
+    return;
+  }
+
+  const int pct = std::clamp(user_brightness_percent_, 0, 100);
+  const int fill_height = (kBrightnessBarHeight * pct) / 100;
+  lv_obj_set_height(brightness_fill_, fill_height);
+
+  char buffer[8] = {};
+  std::snprintf(buffer, sizeof(buffer), "%d%%", pct);
+  set_label_text_if_changed(settings_brightness_label_, buffer);
 }
 
 void Ui::note_activity(bool wake_display_now) {

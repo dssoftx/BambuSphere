@@ -26,15 +26,17 @@ class Ui {
   //   0:                            printer-selector
   //   1 .. kMaxAmsUnits:            AMS unit pages (only present units enabled)
   //   kPageIdxMain:                 main dashboard
-  //   kPageIdxPreview:              print preview
+  //   kPageIdxPreview:              clock page (formerly cloud cover preview)
   //   kPageIdxCamera:               camera feed
+  //   kPageIdxSelfSettings:         display-brightness control
   static constexpr int kPageIdxPrinterSelect = 0;
   static constexpr int kPageIdxAmsFirst = 1;
   static constexpr int kPageIdxAmsLast = kPageIdxAmsFirst + kMaxAmsUnits - 1;
   static constexpr int kPageIdxMain = kPageIdxAmsLast + 1;
   static constexpr int kPageIdxPreview = kPageIdxMain + 1;
   static constexpr int kPageIdxCamera = kPageIdxMain + 2;
-  static constexpr int kPageIdxLast = kPageIdxCamera;
+  static constexpr int kPageIdxSelfSettings = kPageIdxCamera + 1;
+  static constexpr int kPageIdxLast = kPageIdxSelfSettings;
 
   void set_display_rotation(DisplayRotation rotation);
   esp_err_t initialize();
@@ -93,18 +95,20 @@ class Ui {
   void update_printer_cards(const std::vector<PrinterCardInfo>& cards);
   int consume_printer_switch_request();
   void request_wake_display();
+  // Applied the next time initialize() runs (i.e. must be called before it).
+  // Lets Application seed the display with a brightness value persisted in
+  // NVS instead of always booting to a fixed default.
+  void set_initial_brightness_percent(int percent);
+  // True once after a brightness drag on the self-settings page settles
+  // (finger released). Application::loop polls this once per iteration and
+  // persists the value via ConfigStore::save_display_brightness_percent().
+  // Consuming clears the request.
+  bool consume_brightness_save_request(int* out_percent);
 
  private:
   esp_err_t build_dashboard();
   void apply_ring_visual_locked(const PrinterSnapshot& snapshot);
-  void apply_snapshot_locked(const PrinterSnapshot& snapshot, bool force_ring_refresh,
-                             std::shared_ptr<std::vector<uint8_t>> pre_decoded_raw = nullptr,
-                             const lv_image_dsc_t* pre_decoded_dsc = nullptr);
-  bool ensure_preview_image_loaded_locked(
-      bool force_reload,
-      std::shared_ptr<std::vector<uint8_t>> pre_decoded_raw = nullptr,
-      const lv_image_dsc_t* pre_decoded_dsc = nullptr);
-  void release_preview_image_locked();
+  void apply_snapshot_locked(const PrinterSnapshot& snapshot, bool force_ring_refresh);
   void apply_page_visibility();
   void apply_logo_visibility();
   void update_page_availability_locked(const PrinterSnapshot& snapshot);
@@ -126,6 +130,18 @@ class Ui {
   void compute_portal_texts_locked();
   void set_brightness_percent(int brightness_percent);
   void stop_ring_animations_locked();
+  // Vertical-swipe printer cycling (page-agnostic, disabled on the printer
+  // select page and the self-settings page — see handle_screen_event).
+  // direction > 0 selects the next configured printer, < 0 the previous one.
+  // Returns false (no-op, caller must not show any confirmation) when fewer
+  // than two printers are configured.
+  bool cycle_active_printer(int direction);
+  // Display name of the currently-active entry in last_printer_cards_, or
+  // empty when no printers are configured / the cache hasn't populated yet.
+  std::string active_printer_name_locked() const;
+  // Syncs the self-settings brightness fill bar + percentage label with
+  // user_brightness_percent_. Safe to call before the widgets exist.
+  void apply_brightness_fill_locked();
   // Build a single AMS-unit page (widgets attached to ams_pages_[unit_idx]).
   // unit_idx 0 also receives the external-spool widgets.
   void build_ams_page(int unit_idx);
@@ -214,6 +230,7 @@ class Ui {
   lv_obj_t* page1_ = nullptr;
   lv_obj_t* page2_ = nullptr;
   lv_obj_t* page3_ = nullptr;
+  lv_obj_t* page4_ = nullptr;
   lv_obj_t* status_arc_ = nullptr;
   lv_obj_t* progress_label_ = nullptr;
   lv_obj_t* battery_icon_label_ = nullptr;
@@ -238,9 +255,11 @@ class Ui {
   lv_obj_t* remaining_row_ = nullptr;
   lv_obj_t* brightness_overlay_ = nullptr;
   lv_obj_t* page2_shell_ = nullptr;
-  lv_obj_t* page2_image_ = nullptr;
-  lv_obj_t* page2_note_ = nullptr;
-  lv_obj_t* page2_subnote_ = nullptr;
+  // Clock page (formerly the cloud-cover preview page) widgets.
+  lv_obj_t* page2_time_label_ = nullptr;
+  lv_obj_t* page2_remaining_row_ = nullptr;
+  lv_obj_t* page2_remaining_prefix_label_ = nullptr;
+  lv_obj_t* page2_remaining_label_ = nullptr;
   // Print-control buttons on the preview page. Visible while a job is in
   // Printing/Paused/Preparing state. The pause button toggles between
   // pause/resume based on lifecycle. The stop button requires LV_EVENT_LONG_PRESSED
@@ -252,6 +271,10 @@ class Ui {
   lv_obj_t* page3_image_ = nullptr;
   lv_obj_t* page3_note_ = nullptr;
   lv_obj_t* page3_subnote_ = nullptr;
+  // Self-settings page (kPageIdxSelfSettings): brightness control.
+  lv_obj_t* brightness_track_ = nullptr;
+  lv_obj_t* brightness_fill_ = nullptr;
+  lv_obj_t* settings_brightness_label_ = nullptr;
   lv_obj_t* portal_hint_label_ = nullptr;
   lv_obj_t* portal_overlay_card_ = nullptr;
   lv_obj_t* portal_overlay_title_ = nullptr;
@@ -260,6 +283,10 @@ class Ui {
   lv_timer_t* ring_anim_timer_ = nullptr;  // unused, ambient sweep timer removed
   int user_brightness_percent_ = 80;
   int applied_brightness_percent_ = -1;
+  // Seeded via set_initial_brightness_percent() before initialize() runs;
+  // see that method's comment.
+  int initial_brightness_percent_ = 80;
+  bool brightness_save_pending_ = false;
   bool gesture_active_ = false;
   bool overlay_visible_ = false;
   bool scrolling_ = false;
@@ -267,9 +294,10 @@ class Ui {
   bool detail_visible_ = true;
   bool show_logo_ = false;
   bool accent_initialized_ = false;
-  bool preview_page_available_ = true;
-  bool preview_image_visible_ = false;
-  bool preview_text_image_mode_ = false;
+  // Tracks which of the three progress_label_ styles (default/main/raised —
+  // see apply_page_visibility()) is currently applied, so it's only
+  // restyled on an actual page-settle transition, not every call.
+  int progress_label_style_ = 0;
   bool camera_page_available_ = true;
   bool camera_image_visible_ = false;
   bool camera_text_image_mode_ = false;
@@ -308,9 +336,6 @@ class Ui {
   std::string last_diag_status_;
   std::string last_diag_detail_;
   std::string last_diag_stage_;
-  lv_image_dsc_t preview_image_dsc_{};
-  std::shared_ptr<std::vector<uint8_t>> last_preview_blob_{};
-  std::shared_ptr<std::vector<uint8_t>> last_preview_raw_{};
   lv_image_dsc_t camera_image_dscs_[2]{};
   std::shared_ptr<std::vector<uint8_t>> camera_blobs_[2]{};
   uint8_t active_camera_slot_ = 0;

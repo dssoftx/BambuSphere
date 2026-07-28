@@ -283,6 +283,7 @@ void Application::run() {
   ui_.set_arc_color_scheme(config_store_.load_arc_color_scheme());
   ui_.set_display_rotation(config_store_.load_display_rotation());
   ui_.set_battery_display_policy(config_store_.load_battery_display_policy());
+  ui_.set_initial_brightness_percent(config_store_.load_display_brightness_percent());
   filament_wake_enabled_ = config_store_.load_filament_wake_enabled();
   filament_anim_enabled_ = config_store_.load_filament_anim_enabled();
   audio_notifier_.set_enabled(config_store_.load_audio_enabled());
@@ -295,6 +296,9 @@ void Application::run() {
         .base_path = "/sounds",
         .partition_label = "sounds",
         .partition = nullptr,
+        // Explicit default for ESP-IDF versions that added this field
+        // (harmless no-op: nullptr means "use the partition above").
+        .blockdev = nullptr,
         .format_if_mount_failed = true,
         .read_only = false,
         .dont_mount = false,
@@ -361,7 +365,13 @@ void Application::run() {
       cloud_client_.configure(config_store_.load_cloud_credentials(), new_conn.serial);
       ESP_LOGI(kTag, "Switched active printer to profile %d", switch_idx);
     }
-    if (ui_.is_config_page_active()) {
+    // The printer-select page (page0) always wants an up-to-date card list.
+    // Other pages only need it fresh enough for the vertical-swipe printer
+    // cycle gesture (Ui::cycle_active_printer(), driven off last_printer_cards_),
+    // so throttle the NVS profile scan to once every ~2s while browsing
+    // elsewhere instead of doing it on every loop iteration.
+    const bool config_page_active = ui_.is_config_page_active();
+    if (config_page_active || !tick_deadline_active(printer_cards_refresh_deadline_, now_tick)) {
       const auto profiles = config_store_.load_printer_profiles();
       const uint8_t active_idx = config_store_.load_active_printer_index();
       const bool local_connected = printer_client_.snapshot().local_connected;
@@ -378,6 +388,10 @@ void Application::run() {
         cards.push_back(std::move(ci));
       }
       ui_.update_printer_cards(cards);
+      printer_cards_refresh_deadline_ = now_tick + pdMS_TO_TICKS(2000);
+    }
+    if (int brightness_percent = 0; ui_.consume_brightness_save_request(&brightness_percent)) {
+      config_store_.save_display_brightness_percent(brightness_percent);
     }
     const PortalAccessSnapshot portal_access = setup_portal_.access_snapshot();
     const bool wifi_connected = wifi_manager_.is_station_connected();

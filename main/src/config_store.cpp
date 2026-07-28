@@ -18,7 +18,7 @@ namespace printsphere {
 namespace {
 constexpr char kTag[] = "printsphere.cfg";
 constexpr char kNamespace[] = "printsphere";
-constexpr char kDeviceName[] = "PrintSphere";
+constexpr char kDeviceName[] = "BambuSphere";
 
 std::string color_to_html_hex(uint32_t color) {
   char buffer[8] = {};
@@ -260,6 +260,17 @@ int ConfigStore::load_audio_volume_percent() const {
   return static_cast<int>(parsed);
 }
 
+int ConfigStore::load_display_brightness_percent() const {
+  const std::string s = load_string("disp_bright");
+  if (s.empty()) {
+    return 80;
+  }
+  const long parsed = std::strtol(s.c_str(), nullptr, 10);
+  if (parsed < 0) return 0;
+  if (parsed > 100) return 100;
+  return static_cast<int>(parsed);
+}
+
 ArcColorScheme ConfigStore::load_arc_color_scheme() const {
   ArcColorScheme colors;
   colors.printing = parse_color_or_default(load_string("arc_print"), colors.printing);
@@ -366,6 +377,12 @@ esp_err_t ConfigStore::save_audio_volume_percent(int volume) const {
   if (volume < 0) volume = 0;
   if (volume > 100) volume = 100;
   return save_string("audio_vol", std::to_string(volume));
+}
+
+esp_err_t ConfigStore::save_display_brightness_percent(int percent) const {
+  if (percent < 0) percent = 0;
+  if (percent > 100) percent = 100;
+  return save_string("disp_bright", std::to_string(percent));
 }
 
 std::string ConfigStore::load_timezone_iana() const {

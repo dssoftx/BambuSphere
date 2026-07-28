@@ -1,6 +1,6 @@
-# Building PrintSphere
+# Building BambuSphere
 
-This document is for developers and advanced users who want to clone, build, flash or package PrintSphere themselves. Most users should use the [PrintSphere Web Installer](https://cptkirki.github.io/PrintSphere/flash/).
+This document is for developers and advanced users who want to clone, build, flash or package BambuSphere themselves. Most users should use the [BambuSphere Web Installer](https://dssoftx.github.io/BambuSphere/flash/).
 
 ## Requirements
 
@@ -16,8 +16,8 @@ The project uses C17, C++17 and LVGL `v9.5.0`.
 ## Clone the repository
 
 ```powershell
-git clone https://github.com/cptkirki/PrintSphere.git
-cd PrintSphere
+git clone https://github.com/dssoftx/BambuSphere.git
+cd BambuSphere
 ```
 
 Activate the ESP-IDF environment before running `idf.py`. On Windows, use the ESP-IDF PowerShell or command prompt installed with ESP-IDF.
@@ -82,7 +82,7 @@ idf.py -B build-lcd_2_8c -DPRINTSPHERE_HW_VARIANT=lcd_2_8c -p COM7 monitor
 Build both variants first. Then run:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools/package_release.ps1 -Version v1.6.2
+powershell -ExecutionPolicy Bypass -File tools/package_release.ps1 -Version v1.7.0
 ```
 
 The script creates the four current release images plus versioned archive copies:
@@ -99,13 +99,13 @@ Versioned copies are stored below the corresponding `archive/` directories.
 AMOLED 1.75:
 
 ```powershell
-python tools/package_initial_flash.py --build-dir build-amoled_1_75 --release-root release --version v1.6.2
+python tools/package_initial_flash.py --build-dir build-amoled_1_75 --release-root release --version v1.7.0
 ```
 
 LCD 2.8C:
 
 ```powershell
-python tools/package_initial_flash.py --build-dir build-lcd_2_8c --release-root release/2.8c --version v1.6.2-2.8c
+python tools/package_initial_flash.py --build-dir build-lcd_2_8c --release-root release/2.8c --version v1.7.0-2.8c
 ```
 
 ## Initial image versus OTA image
