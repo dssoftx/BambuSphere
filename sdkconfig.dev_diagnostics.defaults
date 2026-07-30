@@ -1,0 +1,11 @@
+# Layered sdkconfig defaults for the dev-diagnostics build only. Pass
+# alongside the base sdkconfig.defaults via:
+#   -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.dev_diagnostics.defaults"
+#
+# Enables FreeRTOS per-task run-time stats (configGENERATE_RUN_TIME_STATS),
+# which main/src/dev_diagnostics.cpp reads via uxTaskGetSystemState() to
+# compute CPU load. Not enabled by default (base sdkconfig.defaults) because
+# the tracking has a small but real always-on cost that normal builds
+# shouldn't pay. FREERTOS_USE_TRACE_FACILITY is pulled in automatically by
+# Kconfig's `select`.
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y

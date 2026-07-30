@@ -5,6 +5,7 @@
 #include "printsphere/audio_notifier.hpp"
 #include "printsphere/bambu_cloud_client.hpp"
 #include "printsphere/config_store.hpp"
+#include "printsphere/dev_diagnostics.hpp"
 #include "printsphere/p1s_camera_client.hpp"
 #include "printsphere/pmu.hpp"
 #include "printsphere/printer_client.hpp"
@@ -31,6 +32,7 @@ class Application {
   SetupPortal setup_portal_;
   SerialProvisioner serial_provisioner_;
   PmuManager pmu_manager_{};
+  DevDiagnostics dev_diagnostics_{};
   AudioNotifier audio_notifier_{};
   bool local_printer_enabled_ = false;
   bool last_local_print_live_ = false;

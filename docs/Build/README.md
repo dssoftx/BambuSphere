@@ -56,6 +56,56 @@ Combined with the hardware axis, there are 4 build directories in total:
 `build-amoled_1_75`, `build-amoled_1_75-h2x2d`, `build-lcd_2_8c`,
 `build-lcd_2_8c-h2x2d`.
 
+## Dev-diagnostics build
+
+`PRINTSPHERE_DEV_DIAGNOSTICS` (`off` by default, `on` to enable) adds an
+on-screen overlay to the main page for testing firmware performance: CPU
+usage and free heap top-left of the printer name, MCU temperature top-right
+(`main/src/dev_diagnostics.cpp`). It's off by default because it enables
+FreeRTOS per-task run-time stats and periodic temperature-sensor polling,
+which have a small but real always-on cost that normal (including beta and
+h2x2d) builds shouldn't pay.
+
+This build is **rebuilt and republished automatically by CI** on every push
+to `main` (`.github/workflows/dev-build.yml`) — the web flasher's "Dev"
+entry always serves the latest `main`, so you normally don't need to build
+this yourself. To build it manually anyway (AMOLED 1.75, mainline printer
+target only):
+
+```powershell
+idf.py -B build-amoled_1_75-dev `
+  -DPRINTSPHERE_HW_VARIANT=amoled_1_75 `
+  -DPRINTSPHERE_PRINTER_TARGET=all `
+  -DPRINTSPHERE_DEV_DIAGNOSTICS=on `
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.dev_diagnostics.defaults" `
+  reconfigure build
+```
+
+The `SDKCONFIG_DEFAULTS` flag is required — without it, the run-time-stats
+Kconfig options in `sdkconfig.dev_diagnostics.defaults` never get applied
+and CPU usage will always read 0%.
+
+`sdkconfig` (the generated, merged config) lives at the project root and is
+shared across every `-B` build directory. Kconfig doesn't automatically
+revert an option just because a later build didn't pass its defaults file
+again, so building this variant and then building any other variant *in the
+same working copy* can leave `CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y`
+enabled in a build that doesn't actually use it (harmless - the code path
+stays compiled out - but wasteful). Always use a dedicated build directory
+for this variant (`build-amoled_1_75-dev`, as above) and reconfigure
+explicitly when switching between it and any other variant, the same as the
+other three variants already require.
+
+Package it the same way as the beta/h2x2d channels, but with `--dev`
+instead of `--beta` (mirrors `--debug`/`--beta`, output goes to
+`release/dev/` with no versioned archive copies - the CI workflow
+overwrites this channel in place on every push rather than accumulating a
+build per commit):
+
+```powershell
+python tools/package_initial_flash.py --build-dir build-amoled_1_75-dev --release-root release --dev
+```
+
 ## Build the AMOLED 1.75 variant
 
 Mainline:

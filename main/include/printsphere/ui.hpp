@@ -240,6 +240,11 @@ class Ui {
   lv_obj_t* logo_image_ = nullptr;
   lv_obj_t* status_label_ = nullptr;
   lv_obj_t* detail_label_ = nullptr;
+  // Dev-diagnostics build only (PRINTSPHERE_DEV_DIAGNOSTICS=1): CPU%/heap
+  // (left) and MCU temperature (right), flanking detail_label_. Stay
+  // nullptr and unused in every other build.
+  lv_obj_t* dev_stats_left_label_ = nullptr;
+  lv_obj_t* dev_stats_right_label_ = nullptr;
   lv_obj_t* layer_label_ = nullptr;
   lv_obj_t* layer_row_ = nullptr;
   lv_obj_t* filament_icon_label_ = nullptr;

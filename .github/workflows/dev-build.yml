@@ -1,0 +1,74 @@
+name: Dev diagnostics build
+
+# Builds the dev-diagnostics firmware (on-screen CPU/heap/temperature
+# overlay, see main/src/dev_diagnostics.cpp) on every push to main and
+# republishes it to release/dev/ so the web flasher's "Dev" entry always
+# serves the latest main. paths-ignore on release/** is what stops this
+# workflow's own publish commit from retriggering itself.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "release/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    # Espressif's own published toolchain image - matches the ESP-IDF
+    # version documented in docs/Build/README.md. Provides $IDF_PATH and
+    # export.sh at the standard location.
+    container:
+      image: espressif/idf:v5.5.4
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (amoled_1_75, mainline target, dev diagnostics on)
+        shell: bash
+        run: |
+          set -euo pipefail
+          . "$IDF_PATH/export.sh"
+
+          base_version=$(grep -oP '(?<=set\(PRINTSPHERE_RELEASE_VERSION ")[^"]+' CMakeLists.txt)
+          short_sha="${GITHUB_SHA:0:7}"
+          dev_version="${base_version}-dev-${short_sha}"
+          echo "DEV_VERSION=${dev_version}" >> "$GITHUB_ENV"
+
+          idf.py -B build-dev \
+            -DPRINTSPHERE_HW_VARIANT=amoled_1_75 \
+            -DPRINTSPHERE_PRINTER_TARGET=all \
+            -DPRINTSPHERE_DEV_DIAGNOSTICS=on \
+            -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.dev_diagnostics.defaults" \
+            -DPRINTSPHERE_RELEASE_VERSION="${dev_version}" \
+            reconfigure build
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/package_initial_flash.py \
+            --build-dir build-dev \
+            --release-root release \
+            --dev
+
+      - name: Publish to release/dev/
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The espressif/idf container runs as root; git (correctly) refuses
+          # to operate on a repo it doesn't own unless told it's safe.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add release/dev/printsphere_full.bin release/dev/printsphere_ota.bin
+          if git diff --cached --quiet; then
+            echo "No changes to publish (binary identical to what's already committed)."
+            exit 0
+          fi
+
+          git commit -m "Automated dev-diagnostics build (${DEV_VERSION})"
+          git push origin HEAD:main

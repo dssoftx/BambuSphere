@@ -277,6 +277,9 @@ void Application::run() {
     ESP_LOGW(kTag, "USB Wi-Fi setup unavailable; use the fallback setup access point");
   }
   ESP_ERROR_CHECK(pmu_manager_.initialize());
+  if (dev_diagnostics_.initialize() != ESP_OK) {
+    ESP_LOGW(kTag, "Dev diagnostics unavailable (temperature sensor init failed)");
+  }
   ESP_LOGI(kTag, "Heap status: internal=%u bytes psram=%u bytes",
            static_cast<unsigned int>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
            static_cast<unsigned int>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
@@ -674,6 +677,14 @@ void Application::run() {
       snapshot.charging = power.charging;
       snapshot.usb_present = power.usb_present;
       snapshot.pmu_temp_c = power.temperature_c;
+    }
+
+    const DevDiagnosticsSnapshot dev_diag = dev_diagnostics_.sample();
+    snapshot.dev_diagnostics_available = dev_diag.available;
+    if (dev_diag.available) {
+      snapshot.dev_cpu_usage_percent = dev_diag.cpu_usage_percent;
+      snapshot.dev_free_heap_bytes = dev_diag.free_heap_bytes;
+      snapshot.dev_mcu_temp_c = dev_diag.mcu_temp_c;
     }
 
     const P1sCameraSnapshot camera_snapshot = camera_client_.snapshot();

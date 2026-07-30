@@ -168,6 +168,12 @@ struct PrinterSnapshot {
   bool charging = false;
   bool usb_present = false;
   float pmu_temp_c = 0.0f;
+  // Dev-diagnostics build only (PRINTSPHERE_DEV_DIAGNOSTICS=1); always
+  // false/zero otherwise - see main/include/printsphere/dev_diagnostics.hpp.
+  bool dev_diagnostics_available = false;
+  uint8_t dev_cpu_usage_percent = 0;
+  uint32_t dev_free_heap_bytes = 0;
+  float dev_mcu_temp_c = 0.0f;
   bool has_error = false;
   bool print_active = false;
   bool warn_hms = false;

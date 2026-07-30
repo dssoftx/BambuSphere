@@ -80,6 +80,10 @@ release/h2x2d/beta/*
 release/h2x2d/beta/archive/*
 !release/h2x2d/beta/archive/printsphere_full-v*.bin
 !release/h2x2d/beta/archive/printsphere_ota-v*.bin
+!release/dev/
+release/dev/*
+!release/dev/printsphere_full.bin
+!release/dev/printsphere_ota.bin
 *.pyc
 *.step
 .clangd

@@ -467,8 +467,8 @@
 
             <p class="note" id="firmware-note"></p>
             <p class="note warning" id="beta-warning" hidden>
-              Beta versions are newer, but they are meant for testing and may not be as reliable
-              as the stable version.
+              Beta and Dev versions are newer, but they are meant for testing and may not be as
+              reliable as the stable version.
             </p>
 
             <div class="install-row">
@@ -565,6 +565,15 @@
           otaUrl: "https://github.com/dssoftx/BambuSphere/blob/main/release/h2x2d/beta/printsphere_ota.bin",
           note: "Same fixes as the v1.7.2 beta above, built specifically for the H2 family and X2D: Connection Mode defaults to Local Only on a fresh config (Cloud/Hybrid remain selectable in Web Config), and Web Config shows a warning about known issues on this printer family - random MQTT disconnects, the ESP32 running warm to the touch, and Hybrid/Cloud mode being slow without Developer Mode enabled on the printer. See the v1.7.2 release notes for details.",
         },
+        {
+          label: "Dev (auto-built from latest main, 1.75 AMOLED)",
+          channel: "Dev",
+          version: "dev",
+          path: "../release/dev/printsphere_full.bin",
+          displayPath: "release/dev/printsphere_full.bin",
+          otaUrl: "https://github.com/dssoftx/BambuSphere/blob/main/release/dev/printsphere_ota.bin",
+          note: "Rebuilt and republished automatically on every push to main - not manually tested, and may be broken or unstable at any given moment. Adds an on-screen overlay (CPU usage and free heap top-left of the printer name, MCU temperature top-right) for testing firmware performance and optimization; not present in any other build. For normal use, pick Stable or Beta above instead.",
+        },
       ];
 
       const select = document.querySelector("#firmware-select");
@@ -626,7 +635,7 @@
         channel.textContent = firmware.channel;
         version.textContent = firmware.version;
         note.textContent = firmware.note;
-        betaWarning.hidden = firmware.channel !== "Beta";
+        betaWarning.hidden = firmware.channel === "Stable";
         captionVersion.textContent = `${firmware.channel} ${firmware.version}`;
         captionPath.textContent = firmware.displayPath;
         otaNote.textContent = `Open the updater, then flash the matching ${firmware.version} OTA image. Your configuration is retained.`;
@@ -641,6 +650,10 @@
       appendOptionGroup(
         "Newer beta builds",
         firmwares.filter((firmware) => firmware.channel === "Beta"),
+      );
+      appendOptionGroup(
+        "Development builds (auto-built)",
+        firmwares.filter((firmware) => firmware.channel === "Dev"),
       );
       select.value = "0";
 

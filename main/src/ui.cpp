@@ -78,6 +78,11 @@ constexpr int kBrightnessLabelY = 130;
 // line -> nozzle/bed chip row -> remaining-time chip (kRemainingRowY, below).
 constexpr int kMainStatusY = -70;
 constexpr int kMainNameRowY = -20;
+// Dev-diagnostics build only: CPU%/heap (left) and MCU temp (right) sit one
+// row above the printer name, mirrored left/right at the same X magnitude
+// used by the chip row's icon offset (kMainChipIconX) for visual consistency.
+constexpr int kDevStatsRowY = kMainNameRowY - 25;
+constexpr int kDevStatsX = -150;
 // No larger montserrat asset is embedded, so the printer-name line is scaled
 // up in place (font-size-only change, same family/color) rather than
 // switched to a different font.
@@ -1906,6 +1911,21 @@ void Ui::apply_snapshot_locked(const PrinterSnapshot& snapshot, bool force_ring_
     set_label_text_if_changed(detail_label_, detail);
   }
 
+#ifdef PRINTSPHERE_DEV_DIAGNOSTICS
+  if (snapshot.dev_diagnostics_available) {
+    char left_text[24];
+    std::snprintf(left_text, sizeof(left_text), "%u%% \xC2\xB7 %uK",
+                  static_cast<unsigned>(snapshot.dev_cpu_usage_percent),
+                  static_cast<unsigned>(snapshot.dev_free_heap_bytes / 1024U));
+    set_label_text_if_changed(dev_stats_left_label_, left_text);
+
+    char right_text[16];
+    std::snprintf(right_text, sizeof(right_text), "%.0f\xC2\xB0" "C",
+                  static_cast<double>(snapshot.dev_mcu_temp_c));
+    set_label_text_if_changed(dev_stats_right_label_, right_text);
+  }
+#endif  // PRINTSPHERE_DEV_DIAGNOSTICS
+
   const std::string layer = layer_text(snapshot);
   set_label_text_if_changed(layer_label_, layer);
 
@@ -2856,6 +2876,20 @@ esp_err_t Ui::build_dashboard() {
   lv_obj_set_style_transform_scale_y(detail_label_, kMainNameScale, 0);
   lv_obj_align(detail_label_, LV_ALIGN_CENTER, 0, kMainNameRowY);
 
+#ifdef PRINTSPHERE_DEV_DIAGNOSTICS
+  dev_stats_left_label_ = lv_label_create(page1_);
+  set_label_text_if_changed(dev_stats_left_label_, "--% --K");
+  lv_obj_set_style_text_font(dev_stats_left_label_, dosis20, 0);
+  lv_obj_set_style_text_color(dev_stats_left_label_, lv_color_hex(0x94A3B8), 0);
+  lv_obj_align(dev_stats_left_label_, LV_ALIGN_CENTER, kDevStatsX, kDevStatsRowY);
+
+  dev_stats_right_label_ = lv_label_create(page1_);
+  set_label_text_if_changed(dev_stats_right_label_, "--\xC2\xB0" "C");
+  lv_obj_set_style_text_font(dev_stats_right_label_, dosis20, 0);
+  lv_obj_set_style_text_color(dev_stats_right_label_, lv_color_hex(0x94A3B8), 0);
+  lv_obj_align(dev_stats_right_label_, LV_ALIGN_CENTER, -kDevStatsX, kDevStatsRowY);
+#endif  // PRINTSPHERE_DEV_DIAGNOSTICS
+
   layer_row_ = lv_obj_create(page1_);
   make_transparent(layer_row_);
   lv_obj_set_size(layer_row_, 360, LV_SIZE_CONTENT);
@@ -3280,6 +3314,10 @@ void Ui::apply_page_visibility() {
   set_hidden(page3_, !camera_page_available_);
   set_hidden(status_label_, !on_page1);
   set_hidden(detail_label_, !on_page1 || !detail_visible_ || show_portal_hint);
+#ifdef PRINTSPHERE_DEV_DIAGNOSTICS
+  set_hidden(dev_stats_left_label_, !on_page1);
+  set_hidden(dev_stats_right_label_, !on_page1);
+#endif  // PRINTSPHERE_DEV_DIAGNOSTICS
   // Layer/filament-weight row has no slot in the reworked main-page layout
   // (mockup #1: %, status, printer name, nozzle/bed chips, remaining chip).
   // Kept built (harmless) but permanently hidden rather than removed.

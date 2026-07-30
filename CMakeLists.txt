@@ -51,6 +51,27 @@ elseif(NOT PRINTSPHERE_PRINTER_TARGET STREQUAL "all")
         "Use 'all' or 'h2x2d'.")
 endif()
 
+# Dev-diagnostics axis: an on-screen CPU/heap/temperature overlay for
+# performance testing, built and published automatically by CI on every
+# push to main. Off by default - the underlying FreeRTOS runtime-stats
+# tracking and temperature-sensor polling this enables have a small but
+# real always-on cost that normal (including beta/h2x2d) builds shouldn't
+# pay. AMOLED/mainline only - no 2.8c or h2x2d nesting.
+set(PRINTSPHERE_DEV_DIAGNOSTICS "off" CACHE STRING
+    "PrintSphere on-screen dev diagnostics overlay: off or on")
+set_property(CACHE PRINTSPHERE_DEV_DIAGNOSTICS PROPERTY STRINGS "off" "on")
+
+set(PRINTSPHERE_DEV_DIAGNOSTICS_COMPILE_DEFINE "")
+if(PRINTSPHERE_DEV_DIAGNOSTICS STREQUAL "on")
+    set(PRINTSPHERE_DEV_DIAGNOSTICS_COMPILE_DEFINE "PRINTSPHERE_DEV_DIAGNOSTICS=1")
+    set(PRINTSPHERE_RELEASE_VERSION_SUFFIX "${PRINTSPHERE_RELEASE_VERSION_SUFFIX}-dev")
+    set(PRINTSPHERE_RELEASE_ROOT "${PRINTSPHERE_RELEASE_ROOT}/dev")
+elseif(NOT PRINTSPHERE_DEV_DIAGNOSTICS STREQUAL "off")
+    message(FATAL_ERROR
+        "Unsupported PRINTSPHERE_DEV_DIAGNOSTICS='${PRINTSPHERE_DEV_DIAGNOSTICS}'. "
+        "Use 'off' or 'on'.")
+endif()
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(printsphere_idf)
 

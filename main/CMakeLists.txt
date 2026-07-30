@@ -35,6 +35,19 @@ elseif("${PRINTSPHERE_HW_COMPILE_DEFINE}" STREQUAL "PRINTSPHERE_HW_VARIANT_LCD_2
     )
 endif()
 
+# Always required, not conditioned on PRINTSPHERE_DEV_DIAGNOSTICS: ESP-IDF
+# evaluates this file twice (once for an early, lightweight component
+# requirements/dependency-graph pass, once for the full configure), and
+# custom top-level CMakeLists.txt variables like
+# PRINTSPHERE_DEV_DIAGNOSTICS_COMPILE_DEFINE are empty during that first
+# pass, so a conditional append here isn't reliably seen by ESP-IDF's
+# dependency validator. Always requiring the component sidesteps that -
+# it's a no-op driver dependency when dev_diagnostics.cpp's real
+# implementation (the only caller) is compiled out via #ifdef.
+list(APPEND PRINTSPHERE_MAIN_PRIV_REQUIRES
+    esp_driver_tsens
+)
+
 idf_component_register(
     SRCS
         "app_main.cpp"
@@ -55,6 +68,7 @@ idf_component_register(
         "src/printer_client.cpp"
         "src/printer_state.cpp"
         "src/debug_log_buffer.cpp"
+        "src/dev_diagnostics.cpp"
         "src/setup_portal.cpp"
         "src/serial_provisioner.cpp"
         "src/status_resolver.cpp"
@@ -79,6 +93,7 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     PRINTSPHERE_RELEASE_VERSION="${PRINTSPHERE_RELEASE_VERSION}"
     ${PRINTSPHERE_HW_COMPILE_DEFINE}
     ${PRINTSPHERE_PRINTER_TARGET_COMPILE_DEFINE}
+    ${PRINTSPHERE_DEV_DIAGNOSTICS_COMPILE_DEFINE}
 )
 
 if("${PRINTSPHERE_HW_COMPILE_DEFINE}" STREQUAL "PRINTSPHERE_HW_VARIANT_AMOLED_1_75=1")

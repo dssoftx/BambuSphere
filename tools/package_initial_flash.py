@@ -47,6 +47,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Package as beta build: output goes to release/beta/, versioned copies to release/beta/archive/",
     )
+    parser.add_argument(
+        "--dev",
+        action="store_true",
+        help="Package as dev-diagnostics build: output goes to release/dev/, overwritten in place with no "
+        "versioned archive copies (meant to be rebuilt on every push, not accumulated).",
+    )
     return parser.parse_args()
 
 
@@ -126,12 +132,17 @@ def main() -> int:
         )
         return 1
 
-    if args.debug and args.beta:
-        print("ERROR: --debug and --beta are mutually exclusive.", flush=True)
+    if sum([args.debug, args.beta, args.dev]) > 1:
+        print("ERROR: --debug, --beta and --dev are mutually exclusive.", flush=True)
         return 1
 
-    # Resolve output paths: --debug and --beta both go to release/beta/
-    if args.debug or args.beta:
+    # Resolve output paths: --debug and --beta both go to release/beta/;
+    # --dev goes to its own release/dev/ so it never collides with beta
+    # binaries (the dev channel is rebuilt and overwritten on every push).
+    if args.dev:
+        output_path = (release_root / "dev" / "printsphere_full.bin").resolve()
+        ota_output_path = (release_root / "dev" / "printsphere_ota.bin").resolve()
+    elif args.debug or args.beta:
         output_path = (release_root / "beta" / "printsphere_full.bin").resolve()
         ota_output_path = (release_root / "beta" / "printsphere_ota.bin").resolve()
     else:
