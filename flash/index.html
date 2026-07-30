@@ -554,7 +554,16 @@
           path: "../release/beta/printsphere_full.bin",
           displayPath: "release/beta/printsphere_full.bin",
           otaUrl: "https://github.com/dssoftx/BambuSphere/blob/main/release/beta/printsphere_ota.bin",
-          note: "Bugfix beta on top of v1.7.1, focused on H2 family/X2D reports: fixes the right/secondary nozzle temperature freezing after its first reading instead of updating live, and loosens the local-MQTT watchdog for models that require Developer Mode for local status to cut down on avoidable reconnects. Also auto-applies your browser's detected time zone on first Web Config visit instead of defaulting to UTC. See the v1.7.2 release notes for details, including the separate dedicated H2/X2D build variant (not this image).",
+          note: "Bugfix beta on top of v1.7.1, focused on H2 family/X2D reports: fixes the right/secondary nozzle temperature freezing after its first reading instead of updating live, and loosens the local-MQTT watchdog for models that require Developer Mode for local status to cut down on avoidable reconnects. Also auto-applies your browser's detected time zone on first Web Config visit instead of defaulting to UTC. See the v1.7.2 release notes for details. If your printer is an H2 family model or X2D, consider the dedicated v1.7.2-2series build below instead.",
+        },
+        {
+          label: "Beta v1.7.2-2series (H2/X2D, 1.75 AMOLED)",
+          channel: "Beta",
+          version: "v1.7.2-2series",
+          path: "../release/h2x2d/beta/printsphere_full.bin",
+          displayPath: "release/h2x2d/beta/printsphere_full.bin",
+          otaUrl: "https://github.com/dssoftx/BambuSphere/blob/main/release/h2x2d/beta/printsphere_ota.bin",
+          note: "Same fixes as the v1.7.2 beta above, built specifically for the H2 family and X2D: Connection Mode defaults to Local Only on a fresh config (Cloud/Hybrid remain selectable in Web Config), and Web Config shows a warning about known issues on this printer family - random MQTT disconnects, the ESP32 running warm to the touch, and Hybrid/Cloud mode being slow without Developer Mode enabled on the printer. See the v1.7.2 release notes for details.",
         },
       ];
 
