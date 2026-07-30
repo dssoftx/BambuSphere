@@ -270,7 +270,10 @@
 
       .visual {
         position: relative;
-        min-height: 520px;
+        /* No min-height here on purpose: .tool uses align-self: center (its
+           own content height), so .visual - which keeps the default
+           align-self: stretch from .hero's align-items: stretch - matches
+           that height exactly instead of an independent fixed height. */
         overflow: hidden;
         border-radius: 8px;
         background: #1d2829;

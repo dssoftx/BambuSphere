@@ -4,7 +4,7 @@ BambuSphere is a round ESP32-S3 companion display for Bambu Lab printers. It sho
 
 It works directly with Bambu Cloud, the printer's local connection, or both. Home Assistant is not required.
 
-<img width="360" alt="BambuSphere AMOLED display" src="coverimage.jpg" />
+<img width="640" alt="BambuSphere AMOLED display" src="horizontalcover.jpg" />
 
 Latest stable version: **v1.7.0**
 
