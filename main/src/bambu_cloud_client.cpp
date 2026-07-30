@@ -1428,9 +1428,10 @@ int extract_active_nozzle_index(const cJSON* device) {
 
 void merge_nozzle_temp_candidates(const cJSON* info_array, int active_nozzle_index,
                                   float* active_temp, bool* active_present,
-                                  float* secondary_temp, bool* secondary_present) {
+                                  float* secondary_temp, bool* secondary_present,
+                                  bool* secondary_claimed) {
   if (!cJSON_IsArray(info_array) || active_temp == nullptr || active_present == nullptr ||
-      secondary_temp == nullptr || secondary_present == nullptr) {
+      secondary_temp == nullptr || secondary_present == nullptr || secondary_claimed == nullptr) {
     return;
   }
 
@@ -1457,9 +1458,14 @@ void merge_nozzle_temp_candidates(const cJSON* info_array, int active_nozzle_ind
     if (id == active_nozzle_index) {
       *active_temp = temp;
       *active_present = true;
-    } else if (id >= 0 && *secondary_temp <= 0.0f) {
+    } else if (id >= 0 && !*secondary_claimed) {
+      // Gate on a per-push "claimed" flag, not on *secondary_temp's
+      // previous value - that value is seeded from the last known reading,
+      // so gating on it froze the secondary nozzle's temp after its first
+      // successful update (same bug fixed in printer_client.cpp).
       *secondary_temp = temp;
       *secondary_present = true;
+      *secondary_claimed = true;
     } else if (fallback_secondary < -999.0f) {
       fallback_secondary = temp;
     }
@@ -1469,7 +1475,7 @@ void merge_nozzle_temp_candidates(const cJSON* info_array, int active_nozzle_ind
     *active_temp = first_temp;
     *active_present = true;
   }
-  if (*secondary_temp <= 0.0f && fallback_secondary > -999.0f) {
+  if (!*secondary_claimed && *secondary_temp <= 0.0f && fallback_secondary > -999.0f) {
     *secondary_temp = fallback_secondary;
     *secondary_present = true;
   }
@@ -1480,6 +1486,11 @@ NozzleTemperatureBundle extract_cloud_nozzle_temperature_bundle(const cJSON* ite
                                                                 float secondary_fallback) {
   NozzleTemperatureBundle bundle{active_fallback, secondary_fallback};
   const cJSON* item_print = child_object_local(item, "print");
+  // Shared across every source/array scanned below so the first entry that
+  // reports the secondary nozzle's temperature in *this* push wins, while a
+  // fresh flag on each call to this function still lets every new push
+  // overwrite the previous reading (see merge_nozzle_temp_candidates).
+  bool secondary_claimed = false;
 
   for (const cJSON* source : {item, item_print}) {
     if (source == nullptr) {
@@ -1504,10 +1515,10 @@ NozzleTemperatureBundle extract_cloud_nozzle_temperature_bundle(const cJSON* ite
     const int merge_index = active_nozzle_index >= 0 ? active_nozzle_index : 0;
     merge_nozzle_temp_candidates(child_array_local(child_object_local(device, "nozzle"), "info"),
                                  merge_index, &bundle.active, &bundle.active_present,
-                                 &bundle.secondary, &bundle.secondary_present);
+                                 &bundle.secondary, &bundle.secondary_present, &secondary_claimed);
     merge_nozzle_temp_candidates(child_array_local(child_object_local(device, "extruder"), "info"),
                                  merge_index, &bundle.active, &bundle.active_present,
-                                 &bundle.secondary, &bundle.secondary_present);
+                                 &bundle.secondary, &bundle.secondary_present, &secondary_claimed);
   }
 
   if (bundle.active <= 0.0f) {

@@ -1558,7 +1558,8 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "border:1px solid #365064;background:#0f1721;display:grid;place-items:center;flex:0 0 auto;} .section-toggle-icon::before{content:'+';"
           "font-size:20px;line-height:1;color:#cfe0f1;} details[open]>.section-summary .section-toggle-icon::before{content:'-';}"
           ".hint-box{padding:14px 16px;border-radius:18px;background:#0e1620;"
-          "border:1px solid #2b3e54;color:var(--muted);} .hint-box strong{color:var(--text);}";
+          "border:1px solid #2b3e54;color:var(--muted);} .hint-box strong{color:var(--text);}"
+          ".hint-box.warn{background:#241c0e;border-color:#7d6222;}";
   html += ".badge-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;}"
           ".badge{padding:14px 16px;border-radius:18px;border:1px solid var(--line);background:#0f1721;display:grid;gap:6px;}"
           ".badge-label{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#91a6bc;}"
@@ -1648,6 +1649,17 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
               ? "Wi-Fi is up. Review or update cloud, local printer access and UI settings below."
               : "Only the Wi-Fi step is available while the ESP is running its setup access point.";
   html += "</div>";
+#ifdef PRINTSPHERE_TARGET_H2X2D
+  html += "<div class=\"hint-box warn\"><strong>H2/X2D build - known issues:</strong> "
+          "This build targets the H2 family and X2D, and defaults to Local Only because "
+          "enabling Developer Mode on these printers (required for local status) also "
+          "disables their Bambu Cloud connection - Hybrid/Cloud mode is never actually "
+          "faster here. Known rough edges on this hardware/printer combination: random "
+          "MQTT disconnects (the printer's own chime on reconnect, not something this "
+          "firmware can silence), the ESP32 running warm to the touch, and Hybrid/Cloud "
+          "mode being slow without Developer Mode enabled on the printer. Cloud and "
+          "Hybrid remain selectable below if you need them.</div>";
+#endif
   html += "</section>";
 
   // --- Reorderable provisioning section renderers ---
@@ -2803,7 +2815,11 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "else{setStatus(body.error||'AMS display change failed',body.detail||'The AMS display settings could not be saved.',8000);amsDisplayApplyButton.disabled=false;updateAmsDisplayControls();}}"
           "catch(error){setStatus('AMS display change failed','The request to the ESP could not be completed.',8000);amsDisplayApplyButton.disabled=false;updateAmsDisplayControls();}});}";
   // Time zone panel: pre-fill the dropdown from the browser when no value is
-  // saved yet, then enable the Apply button only after the user changes it.
+  // saved yet. If nothing is saved yet, also auto-apply that browser-detected
+  // zone immediately (self-gating: savedConfig.tz_iana is non-empty on every
+  // later load, so this never refires) - otherwise a fresh device just shows
+  // correct UTC time until someone happens to open Web Config and click
+  // Apply, which reads as "the clock is broken" to anyone outside UTC.
   html += "{const tzSelect=document.getElementById('tz_iana');"
           "const tzApply=document.getElementById('tz-apply-button');"
           "const tzHint=document.getElementById('tz-detected-hint');"
@@ -2812,16 +2828,21 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "if(tzBrowser){for(const o of tzSelect.options){if(o.value===tzBrowser)return tzBrowser;}}return '';}"
           "function tzUpdateControls(){if(!tzSelect||!tzApply)return;const cur=tzSelect.value;const saved=savedConfig.tz_iana||'';"
           "if(cur!==saved){tzApply.classList.remove('hidden');tzApply.disabled=false;}else{tzApply.classList.add('hidden');}}"
-          "if(tzSelect){const pick=tzInitialPick();if(pick&&!savedConfig.tz_iana){tzSelect.value=pick;}"
-          "if(tzHint){if(tzBrowser){tzHint.textContent='Browser detected: '+tzBrowser+(savedConfig.tz_iana?'':' (pre-selected)');}else{tzHint.textContent='Browser timezone could not be detected.';}}"
+          "async function tzApplyValue(tz_iana){"
+          "try{const response=await fetch('/api/timezone',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tz_iana})});"
+          "const body=await response.json().catch(()=>({}));"
+          "if(response.ok){savedConfig.tz_iana=tz_iana;tzUpdateControls();return true;}"
+          "setStatus(body.error||'Time zone change failed','The new time zone could not be saved.',6000);return false;}"
+          "catch(error){setStatus('Time zone change failed','The request to the ESP could not be completed.',6000);return false;}}"
+          "if(tzSelect){const pick=tzInitialPick();"
+          "if(pick&&!savedConfig.tz_iana){tzSelect.value=pick;tzApplyValue(pick);}"
+          "if(tzHint){if(tzBrowser){tzHint.textContent='Browser detected: '+tzBrowser+(savedConfig.tz_iana?'':' (applied automatically)');}else{tzHint.textContent='Browser timezone could not be detected.';}}"
           "tzSelect.addEventListener('change',tzUpdateControls);tzUpdateControls();}"
           "if(tzApply){tzApply.addEventListener('click',async()=>{const tz_iana=tzSelect?tzSelect.value:'';"
           "tzApply.disabled=true;setStatus('Applying time zone...','Saving and switching local time now (no reboot).',8000);"
-          "try{const response=await fetch('/api/timezone',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tz_iana})});"
-          "const body=await response.json().catch(()=>({}));"
-          "if(response.ok){savedConfig.tz_iana=tz_iana;tzUpdateControls();setStatus('Time zone saved.','Local time is now '+(tz_iana||'UTC')+'.',4000);}"
-          "else{setStatus(body.error||'Time zone change failed','The new time zone could not be saved.',6000);tzApply.disabled=false;tzUpdateControls();}}"
-          "catch(error){setStatus('Time zone change failed','The request to the ESP could not be completed.',6000);tzApply.disabled=false;tzUpdateControls();}});}}";
+          "const ok=await tzApplyValue(tz_iana);"
+          "if(ok){setStatus('Time zone saved.','Local time is now '+(tz_iana||'UTC')+'.',4000);}else{tzApply.disabled=false;tzUpdateControls();}"
+          "});}}";
   // Sound notifications panel: enable/volume save + live test button. Applies
   // without restart so the button feedback is immediate.
   html += "{const audioEnabledSel=document.getElementById('audio_enabled');"

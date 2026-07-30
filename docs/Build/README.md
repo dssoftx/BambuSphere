@@ -33,13 +33,46 @@ Always select the hardware explicitly. Each variant must use its own build direc
 
 Do not reuse one variant's build directory for the other variant.
 
+## Printer target variant
+
+Orthogonal to the hardware variant above, `PRINTSPHERE_PRINTER_TARGET` selects
+which printer family the build is tuned for. Every variant runs the same
+codebase and supports every printer model in the compatibility list — this
+flag only changes a couple of defaults and a Web Config notice, not what the
+firmware can connect to.
+
+| Target | Build flag | Behavior |
+| --- | --- | --- |
+| Mainline (default) | `all` (or omit the flag) | Connection Mode defaults to Hybrid, as today. |
+| H2 family / X2D | `h2x2d` | Connection Mode defaults to Local Only on a fresh config (Cloud/Hybrid stay selectable); Web Config shows a warning banner about known issues on this printer family (random disconnects, ESP32 running warm, Hybrid/Cloud lag without Developer Mode). |
+
+Setting `PRINTSPHERE_PRINTER_TARGET=h2x2d` also appends `-h2x2d` to the
+release version suffix and nests that variant's release artifacts under an
+`h2x2d/` subdirectory (e.g. `release/h2x2d/` for AMOLED 1.75,
+`release/2.8c/h2x2d/` for LCD 2.8C) so they never collide with the mainline
+build's images.
+
+Combined with the hardware axis, there are 4 build directories in total:
+`build-amoled_1_75`, `build-amoled_1_75-h2x2d`, `build-lcd_2_8c`,
+`build-lcd_2_8c-h2x2d`.
+
 ## Build the AMOLED 1.75 variant
+
+Mainline:
 
 ```powershell
 idf.py -B build-amoled_1_75 -DPRINTSPHERE_HW_VARIANT=amoled_1_75 reconfigure build
 ```
 
-Build, flash and open the serial monitor:
+H2/X2D:
+
+```powershell
+idf.py -B build-amoled_1_75-h2x2d -DPRINTSPHERE_HW_VARIANT=amoled_1_75 -DPRINTSPHERE_PRINTER_TARGET=h2x2d reconfigure build
+```
+
+Build, flash and open the serial monitor (mainline shown; add
+`-DPRINTSPHERE_PRINTER_TARGET=h2x2d` and use the `-h2x2d` build directory for
+that variant):
 
 ```powershell
 idf.py -B build-amoled_1_75 -DPRINTSPHERE_HW_VARIANT=amoled_1_75 -p COM9 build flash monitor
@@ -49,11 +82,21 @@ Replace `COM9` with the correct port on your system.
 
 ## Build the LCD 2.8C variant
 
+Mainline:
+
 ```powershell
 idf.py -B build-lcd_2_8c -DPRINTSPHERE_HW_VARIANT=lcd_2_8c reconfigure build
 ```
 
-Build, flash and open the serial monitor:
+H2/X2D:
+
+```powershell
+idf.py -B build-lcd_2_8c-h2x2d -DPRINTSPHERE_HW_VARIANT=lcd_2_8c -DPRINTSPHERE_PRINTER_TARGET=h2x2d reconfigure build
+```
+
+Build, flash and open the serial monitor (mainline shown; add
+`-DPRINTSPHERE_PRINTER_TARGET=h2x2d` and use the `-h2x2d` build directory for
+that variant):
 
 ```powershell
 idf.py -B build-lcd_2_8c -DPRINTSPHERE_HW_VARIANT=lcd_2_8c -p COM7 build flash monitor
@@ -70,6 +113,13 @@ idf.py -B build-amoled_1_75 -DPRINTSPHERE_HW_VARIANT=amoled_1_75 -p COM9 flash
 idf.py -B build-amoled_1_75 -DPRINTSPHERE_HW_VARIANT=amoled_1_75 -p COM9 monitor
 ```
 
+AMOLED 1.75, H2/X2D:
+
+```powershell
+idf.py -B build-amoled_1_75-h2x2d -DPRINTSPHERE_HW_VARIANT=amoled_1_75 -DPRINTSPHERE_PRINTER_TARGET=h2x2d -p COM9 flash
+idf.py -B build-amoled_1_75-h2x2d -DPRINTSPHERE_HW_VARIANT=amoled_1_75 -DPRINTSPHERE_PRINTER_TARGET=h2x2d -p COM9 monitor
+```
+
 LCD 2.8C:
 
 ```powershell
@@ -77,9 +127,16 @@ idf.py -B build-lcd_2_8c -DPRINTSPHERE_HW_VARIANT=lcd_2_8c -p COM7 flash
 idf.py -B build-lcd_2_8c -DPRINTSPHERE_HW_VARIANT=lcd_2_8c -p COM7 monitor
 ```
 
+LCD 2.8C, H2/X2D:
+
+```powershell
+idf.py -B build-lcd_2_8c-h2x2d -DPRINTSPHERE_HW_VARIANT=lcd_2_8c -DPRINTSPHERE_PRINTER_TARGET=h2x2d -p COM7 flash
+idf.py -B build-lcd_2_8c-h2x2d -DPRINTSPHERE_HW_VARIANT=lcd_2_8c -DPRINTSPHERE_PRINTER_TARGET=h2x2d -p COM7 monitor
+```
+
 ## Package both release variants
 
-Build both variants first. Then run:
+Build both mainline hardware variants first. Then run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/package_release.ps1 -Version v1.7.0
@@ -94,6 +151,10 @@ The script creates the four current release images plus versioned archive copies
 
 Versioned copies are stored below the corresponding `archive/` directories.
 
+`tools/package_release.ps1` only knows about the two mainline hardware
+variants (`PRINTSPHERE_PRINTER_TARGET=all`). Package `h2x2d` builds manually,
+below.
+
 ## Package one variant manually
 
 AMOLED 1.75:
@@ -106,6 +167,18 @@ LCD 2.8C:
 
 ```powershell
 python tools/package_initial_flash.py --build-dir build-lcd_2_8c --release-root release/2.8c --version v1.7.0-2.8c
+```
+
+AMOLED 1.75, H2/X2D:
+
+```powershell
+python tools/package_initial_flash.py --build-dir build-amoled_1_75-h2x2d --release-root release/h2x2d --version v1.7.0-h2x2d
+```
+
+LCD 2.8C, H2/X2D:
+
+```powershell
+python tools/package_initial_flash.py --build-dir build-lcd_2_8c-h2x2d --release-root release/2.8c/h2x2d --version v1.7.0-2.8c-h2x2d
 ```
 
 ## Initial image versus OTA image
@@ -135,11 +208,13 @@ The merged image already contains the bootloader and partition table.
 
 ## Reconfigure and clean builds
 
-Use `reconfigure` first when CMake settings, dependencies or hardware options change:
+Use `reconfigure` first when CMake settings, dependencies or hardware/printer-target options change:
 
 ```powershell
 idf.py -B build-amoled_1_75 -DPRINTSPHERE_HW_VARIANT=amoled_1_75 reconfigure
 idf.py -B build-lcd_2_8c -DPRINTSPHERE_HW_VARIANT=lcd_2_8c reconfigure
+idf.py -B build-amoled_1_75-h2x2d -DPRINTSPHERE_HW_VARIANT=amoled_1_75 -DPRINTSPHERE_PRINTER_TARGET=h2x2d reconfigure
+idf.py -B build-lcd_2_8c-h2x2d -DPRINTSPHERE_HW_VARIANT=lcd_2_8c -DPRINTSPHERE_PRINTER_TARGET=h2x2d reconfigure
 ```
 
 `fullclean` is normally unnecessary. If a build cache is genuinely broken, remove or recreate only the affected variant's build directory.

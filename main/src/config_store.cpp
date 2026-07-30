@@ -226,6 +226,18 @@ SourceMode ConfigStore::load_source_mode() const {
   if (value.empty()) {
     value = load_string("state_source");
   }
+  if (value.empty()) {
+#ifdef PRINTSPHERE_TARGET_H2X2D
+    // This build targets the H2 family/X2D, where enabling Developer Mode
+    // (required for local status on these models) disables the printer's
+    // own Bambu Cloud connection - Hybrid/Cloud mode is never actually
+    // faster here the way it is on A1/P1/X1. Default fresh configs to Local
+    // Only; Cloud/Hybrid remain fully selectable in Web Config afterward.
+    return SourceMode::kLocalOnly;
+#else
+    return SourceMode::kHybrid;
+#endif
+  }
   return parse_source_mode(value);
 }
 

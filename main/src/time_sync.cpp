@@ -1,5 +1,7 @@
 #include "printsphere/time_sync.hpp"
 
+#include <sys/time.h>
+
 #include <array>
 #include <cstdlib>
 #include <ctime>
@@ -16,6 +18,16 @@ constexpr char kTag[] = "printsphere.time";
 
 bool g_sntp_started = false;
 std::string g_current_iana{};
+
+// Diagnostic only - logs exactly when the first (and each subsequent) SNTP
+// sync lands, so a "time looks wrong" report can distinguish "SNTP never
+// synced" from "SNTP synced fine, the timezone/UI is what's wrong."
+void log_sntp_sync(struct timeval* tv) {
+  if (tv == nullptr) {
+    return;
+  }
+  ESP_LOGI(kTag, "SNTP time sync: %lld", static_cast<long long>(tv->tv_sec));
+}
 
 struct TzEntry {
   const char* iana;
@@ -140,6 +152,7 @@ void start_sntp_if_needed() {
   esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
   cfg.start = true;
   cfg.smooth_sync = false;
+  cfg.sync_cb = &log_sntp_sync;
   const esp_err_t err = esp_netif_sntp_init(&cfg);
   if (err != ESP_OK) {
     ESP_LOGW(kTag, "SNTP init failed: %s", esp_err_to_name(err));

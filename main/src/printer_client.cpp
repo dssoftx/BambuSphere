@@ -139,9 +139,27 @@ constexpr uint32_t kPeriodicPushallMs = 60000;
 // only if it still stays silent do we force a reconnect.
 constexpr uint32_t kNoDataProbeMs = 30000;
 constexpr uint32_t kNoDataReconnectMs = 15000;
+// Models whose local status requires the printer's Developer Mode (H2 family,
+// X2D) have been observed reporting on a less consistent cadence than the
+// generic A1/P1/X1 firmware, tripping the watchdog above into reconnects that
+// aren't needed - each rebuild opens a fresh MQTT session, which re-triggers
+// the printer's own connect chime. Give those models more slack before probing
+// or forcing a rebuild.
+constexpr uint32_t kNoDataProbeMsDevMode = 60000;
+constexpr uint32_t kNoDataReconnectMsDevMode = 30000;
 constexpr uint32_t kDisconnectedStallMs = 20000;
 constexpr uint32_t kRebuildDelayMs = 1500;
 constexpr size_t kMaxMqttPayloadBytes = 64U * 1024U;
+
+uint32_t no_data_probe_ms_for_model(PrinterModel model) {
+  return printer_model_requires_developer_mode_for_local_status(model) ? kNoDataProbeMsDevMode
+                                                                       : kNoDataProbeMs;
+}
+
+uint32_t no_data_reconnect_ms_for_model(PrinterModel model) {
+  return printer_model_requires_developer_mode_for_local_status(model) ? kNoDataReconnectMsDevMode
+                                                                       : kNoDataReconnectMs;
+}
 
 extern const uint8_t bambu_root_cert_start[] asm("_binary_bambu_cert_start");
 extern const uint8_t bambu_root_cert_end[] asm("_binary_bambu_cert_end");
@@ -821,8 +839,10 @@ int extract_active_nozzle_index(const cJSON* device) {
 }
 
 void merge_nozzle_temp_candidates(const cJSON* info_array, int active_nozzle_index,
-                                  float* active_temp, float* secondary_temp) {
-  if (!cJSON_IsArray(info_array) || active_temp == nullptr || secondary_temp == nullptr) {
+                                  float* active_temp, float* secondary_temp,
+                                  bool* secondary_claimed) {
+  if (!cJSON_IsArray(info_array) || active_temp == nullptr || secondary_temp == nullptr ||
+      secondary_claimed == nullptr) {
     return;
   }
 
@@ -849,8 +869,13 @@ void merge_nozzle_temp_candidates(const cJSON* info_array, int active_nozzle_ind
 
     if (id == active_nozzle_index) {
       *active_temp = temp;
-    } else if (id >= 0 && *secondary_temp <= 0.0f) {
+    } else if (id >= 0 && !*secondary_claimed) {
+      // Each new MQTT push re-runs this from scratch (secondary_claimed is
+      // reset per push in extract_nozzle_temperature_bundle) - this must
+      // NOT be gated on *secondary_temp's previous value, or the secondary
+      // nozzle's reading freezes forever after its first successful update.
       *secondary_temp = temp;
+      *secondary_claimed = true;
     } else if (fallback_secondary < -999.0f) {
       fallback_secondary = temp;
     }
@@ -859,7 +884,7 @@ void merge_nozzle_temp_candidates(const cJSON* info_array, int active_nozzle_ind
   if (*active_temp <= 0.0f && first_temp > -999.0f) {
     *active_temp = first_temp;
   }
-  if (*secondary_temp <= 0.0f && fallback_secondary > -999.0f) {
+  if (!*secondary_claimed && *secondary_temp <= 0.0f && fallback_secondary > -999.0f) {
     *secondary_temp = fallback_secondary;
   }
 }
@@ -918,10 +943,14 @@ NozzleTemperatureBundle extract_nozzle_temperature_bundle(const cJSON* print, fl
   const int active_nozzle_index = extract_active_nozzle_index(device);
   bundle.active_nozzle_index = active_nozzle_index;
   const int merge_index = active_nozzle_index >= 0 ? active_nozzle_index : 0;
+  // Shared across both sources so the first one that reports the secondary
+  // nozzle's temperature in *this* push wins, while still letting every new
+  // push (fresh bool, not persisted) overwrite the previous reading.
+  bool secondary_claimed = false;
   merge_nozzle_temp_candidates(child_array_local(child_object_local(device, "nozzle"), "info"),
-                               merge_index, &bundle.active, &bundle.secondary);
+                               merge_index, &bundle.active, &bundle.secondary, &secondary_claimed);
   merge_nozzle_temp_candidates(child_array_local(extruder, "info"), merge_index,
-                               &bundle.active, &bundle.secondary);
+                               &bundle.active, &bundle.secondary, &secondary_claimed);
   ESP_LOGD(kTag, "[DBG] nozzle bundle final: active=%.1f secondary=%.1f active_nozzle_idx=%d",
            bundle.active, bundle.secondary, active_nozzle_index);
   return bundle;
@@ -2838,16 +2867,26 @@ void PrinterClient::task_loop() {
 
     if (mqtt_connected_ && subscription_acknowledged_ && received_payload_) {
       const uint32_t last = last_message_tick_.load();
+      // kNoDataProbeMs (the generic, non-dev-mode threshold) is the smaller of
+      // the two possible probe windows, so it's a safe cheap pre-filter: only
+      // once we're actually past it do we pay for a runtime_state_copy() to
+      // find the model and re-check against its real (possibly looser)
+      // threshold. Matches the periodic-pushall check below.
       if (tick_elapsed(last, now, pdMS_TO_TICKS(kNoDataProbeMs))) {
-        const uint32_t probe_tick = watchdog_probe_tick_.load();
-        if (probe_tick == 0) {
-          ESP_LOGW(kTag, "No MQTT data for %us, sending keepalive start request",
-                   static_cast<unsigned>(kNoDataProbeMs / 1000U));
-          publish_request(kStartPush);
-          watchdog_probe_tick_ = now;
-        } else if (tick_elapsed(probe_tick, now, pdMS_TO_TICKS(kNoDataReconnectMs))) {
-          ESP_LOGW(kTag, "Still no MQTT data after keepalive probe, forcing reconnect");
-          schedule_client_rebuild("no data watchdog", kRebuildDelayMs, true);
+        const PrinterModel local_model = runtime_state_copy().local_model;
+        const uint32_t no_data_probe_ms = no_data_probe_ms_for_model(local_model);
+        if (tick_elapsed(last, now, pdMS_TO_TICKS(no_data_probe_ms))) {
+          const uint32_t probe_tick = watchdog_probe_tick_.load();
+          if (probe_tick == 0) {
+            ESP_LOGW(kTag, "No MQTT data for %us, sending keepalive start request",
+                     static_cast<unsigned>(no_data_probe_ms / 1000U));
+            publish_request(kStartPush);
+            watchdog_probe_tick_ = now;
+          } else if (tick_elapsed(probe_tick, now,
+                                  pdMS_TO_TICKS(no_data_reconnect_ms_for_model(local_model)))) {
+            ESP_LOGW(kTag, "Still no MQTT data after keepalive probe, forcing reconnect");
+            schedule_client_rebuild("no data watchdog", kRebuildDelayMs, true);
+          }
         }
       } else {
         watchdog_probe_tick_ = 0;

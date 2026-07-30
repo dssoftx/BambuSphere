@@ -4,7 +4,7 @@ set(IDF_TARGET "esp32s3")
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(PRINTSPHERE_RELEASE_VERSION "v1.7.1")
+set(PRINTSPHERE_RELEASE_VERSION "v1.7.2")
 set(PROJECT_VER "${PRINTSPHERE_RELEASE_VERSION}")
 set(PRINTSPHERE_HW_VARIANT "lcd_2_8c" CACHE STRING
     "PrintSphere hardware variant: lcd_2_8c or amoled_1_75")
@@ -28,6 +28,27 @@ else()
     message(FATAL_ERROR
         "Unsupported PRINTSPHERE_HW_VARIANT='${PRINTSPHERE_HW_VARIANT}'. "
         "Use 'lcd_2_8c' or 'amoled_1_75'.")
+endif()
+
+# Printer-target axis, orthogonal to PRINTSPHERE_HW_VARIANT above: 'all' is the
+# mainline build (any supported printer); 'h2x2d' is a dedicated build for the
+# H2 family/X2D that defaults Connection Mode to Local Only on a fresh config
+# and shows a Web Config warning about known issues on this printer family.
+# Both variants share one codebase - only the compile define and release
+# packaging path differ.
+set(PRINTSPHERE_PRINTER_TARGET "all" CACHE STRING
+    "PrintSphere printer target: all or h2x2d")
+set_property(CACHE PRINTSPHERE_PRINTER_TARGET PROPERTY STRINGS "all" "h2x2d")
+
+set(PRINTSPHERE_PRINTER_TARGET_COMPILE_DEFINE "")
+if(PRINTSPHERE_PRINTER_TARGET STREQUAL "h2x2d")
+    set(PRINTSPHERE_PRINTER_TARGET_COMPILE_DEFINE "PRINTSPHERE_TARGET_H2X2D=1")
+    set(PRINTSPHERE_RELEASE_VERSION_SUFFIX "${PRINTSPHERE_RELEASE_VERSION_SUFFIX}-h2x2d")
+    set(PRINTSPHERE_RELEASE_ROOT "${PRINTSPHERE_RELEASE_ROOT}/h2x2d")
+elseif(NOT PRINTSPHERE_PRINTER_TARGET STREQUAL "all")
+    message(FATAL_ERROR
+        "Unsupported PRINTSPHERE_PRINTER_TARGET='${PRINTSPHERE_PRINTER_TARGET}'. "
+        "Use 'all' or 'h2x2d'.")
 endif()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
