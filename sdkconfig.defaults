@@ -49,6 +49,10 @@ CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LV_OS_FREERTOS=y
 CONFIG_ESP_LVGL_ADAPTER_ENABLE_DECODER=y
+# LVGL's own worker thread stack is a few KB that would otherwise sit in
+# internal SRAM for the life of the app; PSRAM is plentiful (8 MB) and this
+# stack isn't latency-sensitive enough to need internal-only access.
+CONFIG_ESP_LVGL_ADAPTER_LVGL_THREAD_STACK_IN_PSRAM=y
 CONFIG_LV_USE_CLIB_MALLOC=y
 CONFIG_LV_USE_CLIB_STRING=y
 CONFIG_LV_USE_CLIB_SPRINTF=y

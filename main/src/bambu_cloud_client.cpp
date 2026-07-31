@@ -1962,8 +1962,13 @@ esp_err_t BambuCloudClient::start() {
     return ESP_OK;
   }
 
-  const BaseType_t result =
-      xTaskCreate(&BambuCloudClient::task_entry, "bambu_cloud", 16384, this, 4, &task_handle_);
+  // Stack lives in PSRAM (8 MB available) rather than internal SRAM: this
+  // task runs for the app's whole lifetime and is by far the largest
+  // long-lived stack (16 KiB) still coming out of internal RAM. See
+  // p1s_camera_client.cpp's task for the same pattern.
+  const BaseType_t result = xTaskCreateWithCaps(&BambuCloudClient::task_entry, "bambu_cloud",
+                                                 16384, this, 4, &task_handle_,
+                                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   return result == pdPASS ? ESP_OK : ESP_FAIL;
 }
 

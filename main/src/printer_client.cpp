@@ -1318,8 +1318,13 @@ esp_err_t PrinterClient::start() {
     return ESP_OK;
   }
 
-  const BaseType_t result =
-      xTaskCreate(&PrinterClient::task_entry, "printer_client", 8192, this, 5, &task_handle_);
+  // Stack lives in PSRAM (8 MB available) rather than internal SRAM: this
+  // task runs for the app's whole lifetime, and internal RAM is the scarce
+  // resource (shared with Wi-Fi/TLS/LVGL). See p1s_camera_client.cpp's
+  // task for the same pattern.
+  const BaseType_t result = xTaskCreateWithCaps(&PrinterClient::task_entry, "printer_client",
+                                                 8192, this, 5, &task_handle_,
+                                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   return result == pdPASS ? ESP_OK : ESP_FAIL;
 }
 
