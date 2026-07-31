@@ -69,6 +69,16 @@ bool tick_deadline_active(TickType_t deadline, TickType_t now) {
   return deadline != 0 && static_cast<int32_t>(deadline - now) > 0;
 }
 
+std::vector<std::string> cloud_bound_serials(const std::vector<PrinterProfile>& profiles) {
+  std::vector<std::string> serials;
+  for (const auto& p : profiles) {
+    if (p.cloud_bound && !p.serial.empty()) {
+      serials.push_back(p.serial);
+    }
+  }
+  return serials;
+}
+
 PrinterModel preferred_model_for_routing(const PrinterSnapshot& local_snapshot,
                                          const BambuCloudSnapshot& cloud_snapshot) {
   if (cloud_snapshot.model != PrinterModel::kUnknown) {
@@ -239,8 +249,8 @@ void wait_for_next_iteration(Ui& ui, TickType_t delay) {
 }
 
 Application::Application()
-    : setup_portal_(config_store_, wifi_manager_, cloud_client_, printer_client_, camera_client_,
-                    ui_, pmu_manager_, audio_notifier_),
+    : setup_portal_(config_store_, wifi_manager_, cloud_client_, printer_client_pool_,
+                    camera_client_, ui_, pmu_manager_, audio_notifier_),
       serial_provisioner_(config_store_, wifi_manager_) {
   cloud_client_.set_config_store(&config_store_);
   // Route printer online/offline events from the Bambu Cloud MQTT feed to the
@@ -248,7 +258,8 @@ Application::Application()
   // printer is known to be reachable again. Avoids blind TCP-probe cycles while
   // the printer is powered off or roaming on the LAN.
   cloud_client_.set_printer_presence_callback([this](bool online) {
-    printer_client_.notify_cloud_presence(online);
+    const uint8_t active_idx = config_store_.load_active_printer_index();
+    printer_client_pool_.client_for(active_idx).notify_cloud_presence(online);
   });
 }
 
@@ -345,11 +356,17 @@ void Application::run() {
   const BambuCloudCredentials cloud_credentials = config_store_.load_cloud_credentials();
   source_mode_ = config_store_.load_source_mode();
   const PrinterConnection printer_connection = config_store_.load_active_printer_profile().to_connection();
-  cloud_client_.configure(cloud_credentials, printer_connection.serial);
+  const auto boot_profiles = config_store_.load_printer_profiles();
+  // Subscribes this one cloud MQTT session to every cloud-bound printer, not
+  // just the active one, so switching later is instant (see set_active_serial()).
+  cloud_client_.configure(cloud_credentials, cloud_bound_serials(boot_profiles),
+                          printer_connection.serial);
   ESP_ERROR_CHECK(cloud_client_.start());
 
-  printer_client_.configure(printer_connection);
-  ESP_ERROR_CHECK(printer_client_.start());
+  // Start a persistent background connection for every profile with local
+  // config, not just the active one, so switching printers later just reads
+  // an already-live connection instead of reconnecting from scratch.
+  printer_client_pool_.sync_with_profiles(boot_profiles);
   camera_client_.configure(printer_connection);
   ESP_ERROR_CHECK(camera_client_.start());
 
@@ -366,9 +383,12 @@ void Application::run() {
         static_cast<uint8_t>(switch_idx) != config_store_.load_active_printer_index()) {
       config_store_.save_active_printer_index(static_cast<uint8_t>(switch_idx));
       const PrinterConnection new_conn = config_store_.load_active_printer_profile().to_connection();
-      printer_client_.configure(new_conn);
+      // Local MQTT (PrinterClientPool) and cloud MQTT (subscribed to every
+      // cloud-bound serial already) are both already running in the
+      // background — switching is just re-pointing the camera client and
+      // telling the cloud client which serial is now active, not reconnecting.
       camera_client_.configure(new_conn);
-      cloud_client_.configure(config_store_.load_cloud_credentials(), new_conn.serial);
+      cloud_client_.set_active_serial(new_conn.serial);
       ESP_LOGI(kTag, "Switched active printer to profile %d", switch_idx);
     }
     // The printer-select page (page0) always wants an up-to-date card list.
@@ -380,7 +400,6 @@ void Application::run() {
     if (config_page_active || !tick_deadline_active(printer_cards_refresh_deadline_, now_tick)) {
       const auto profiles = config_store_.load_printer_profiles();
       const uint8_t active_idx = config_store_.load_active_printer_index();
-      const bool local_connected = printer_client_.snapshot().local_connected;
       std::vector<Ui::PrinterCardInfo> cards;
       cards.reserve(profiles.size());
       for (const auto& p : profiles) {
@@ -390,7 +409,10 @@ void Application::run() {
         ci.model = p.model;
         ci.host = p.host;
         ci.active = (p.index == active_idx);
-        ci.connected = ci.active && local_connected;
+        // Every profile with local config now has its own persistent
+        // background connection, so each card can show its own live status
+        // instead of only the active one.
+        ci.connected = printer_client_pool_.client_for(p.index).snapshot().local_connected;
         cards.push_back(std::move(ci));
       }
       ui_.update_printer_cards(cards);
@@ -408,8 +430,26 @@ void Application::run() {
     source_mode_ = config_store_.load_source_mode();
     const bool source_mode_changed = source_mode_ != last_source_mode_;
     const bool wifi_lost = !wifi_connected && last_wifi_connected_;
-    local_printer_enabled_ = printer_client_.is_configured();
-    PrinterSnapshot local_snapshot = printer_client_.snapshot();
+    // Local MQTT for every configured printer runs continuously in the
+    // background (PrinterClientPool); the main loop only ever needs to read
+    // and drive whichever one is currently active.
+    const uint8_t active_printer_index = config_store_.load_active_printer_index();
+    if (active_printer_index != last_active_printer_index_) {
+      // The audio edge-detector tracks one app-wide "last lifecycle"
+      // baseline, not one per printer. Without this, switching to a printer
+      // with a different print state (e.g. printing vs. idle) reads as a
+      // real lifecycle transition of "the" printer and fires a spurious
+      // chime. Un-priming makes the next snapshot just capture the new
+      // baseline silently, exactly like the first snapshot after boot does.
+      // Detecting the index change here (rather than only in the touch
+      // switch handler above) also covers switches made via the web setup
+      // portal.
+      audio_state_primed_ = false;
+      last_active_printer_index_ = active_printer_index;
+    }
+    PrinterClient& active_printer_client = printer_client_pool_.client_for(active_printer_index);
+    local_printer_enabled_ = active_printer_client.is_configured();
+    PrinterSnapshot local_snapshot = active_printer_client.snapshot();
     if (local_snapshot.local_connected && local_mqtt_handoff_until_tick_.load() != 0) {
       local_mqtt_handoff_until_tick_ = 0;
       ESP_LOGI(kTag, "Local MQTT handoff complete: local MQTT connected");
@@ -489,7 +529,13 @@ void Application::run() {
     const bool local_camera_network_ready =
         local_network_ready &&
         (source_mode_ == SourceMode::kLocalOnly || hybrid_local_camera_demand);
-    printer_client_.set_network_ready(local_network_ready);
+    active_printer_client.set_network_ready(local_network_ready);
+    // Background (non-active) printers aren't part of the local/cloud status
+    // arbitration above — they just need to stay connected whenever Wi-Fi is
+    // up and the source mode allows local connections at all.
+    printer_client_pool_.set_background_network_ready(
+        wifi_connected && source_mode_ != SourceMode::kCloudOnly,
+        config_store_.load_active_printer_index());
     camera_client_.set_network_ready(local_camera_network_ready);
 
     local_snapshot.wifi_connected = wifi_connected;
@@ -622,7 +668,7 @@ void Application::run() {
                                      local_snapshot, cloud_snapshot);
 
       if (light_plan.try_local) {
-        command_sent = printer_client_.set_chamber_light(requested_on);
+        command_sent = active_printer_client.set_chamber_light(requested_on);
         if (command_sent) {
           mark_chamber_light_state(local_snapshot, requested_on);
         }
@@ -653,7 +699,7 @@ void Application::run() {
           local_network_ready, local_printer_enabled_, cloud_network_ready, local_snapshot,
           cloud_snapshot);
       if (plan.try_local) {
-        command_sent = printer_client_.set_print_command(requested_print_cmd);
+        command_sent = active_printer_client.set_print_command(requested_print_cmd);
       }
       if (!command_sent && plan.try_cloud) {
         command_sent = cloud_client_.set_print_command(requested_print_cmd);

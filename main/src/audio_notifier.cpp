@@ -8,6 +8,7 @@
 
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -335,11 +336,15 @@ esp_err_t AudioNotifier::initialize() {
   g_custom_pcm_ptr = custom_pcm_;
 
   // Stack: square-wave rendering is light, but esp_codec_dev_write goes through
-  // I2S DMA + codec driver — 4 kB is comfortable, 3 kB cuts close.
+  // I2S DMA + codec driver — 4 kB is comfortable, 3 kB cuts close. The stack
+  // itself never needs DMA-capable memory (the I2S driver owns its own DMA
+  // buffers separately), so it lives in PSRAM like the other long-lived task
+  // stacks — this task runs for the app's entire lifetime.
   TaskHandle_t handle = nullptr;
   const BaseType_t ok =
-      xTaskCreatePinnedToCore(&worker_task, "audio_notif", 4096, nullptr,
-                              tskIDLE_PRIORITY + 3, &handle, 0);
+      xTaskCreatePinnedToCoreWithCaps(&worker_task, "audio_notif", 4096, nullptr,
+                                      tskIDLE_PRIORITY + 3, &handle, 0,
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (ok != pdPASS) {
     ESP_LOGE(kTag, "task create failed");
     return ESP_ERR_NO_MEM;

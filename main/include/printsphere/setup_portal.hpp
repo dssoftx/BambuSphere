@@ -11,6 +11,7 @@
 #include "printsphere/config_store.hpp"
 #include "printsphere/p1s_camera_client.hpp"
 #include "printsphere/printer_client.hpp"
+#include "printsphere/printer_client_pool.hpp"
 #include "printsphere/pmu.hpp"
 #include "printsphere/wifi_manager.hpp"
 
@@ -33,13 +34,13 @@ struct PortalAccessSnapshot {
 class SetupPortal {
  public:
   SetupPortal(ConfigStore& config_store, const WifiManager& wifi_manager,
-              BambuCloudClient& cloud_client, PrinterClient& printer_client,
+              BambuCloudClient& cloud_client, PrinterClientPool& printer_client_pool,
               P1sCameraClient& camera_client, Ui& ui, const PmuManager& pmu_manager,
               AudioNotifier& audio_notifier)
       : config_store_(config_store),
         wifi_manager_(wifi_manager),
         cloud_client_(cloud_client),
-        printer_client_(printer_client),
+        printer_client_pool_(printer_client_pool),
         camera_client_(camera_client),
         ui_(ui),
         pmu_manager_(pmu_manager),
@@ -100,7 +101,7 @@ class SetupPortal {
   ConfigStore& config_store_;
   const WifiManager& wifi_manager_;
   BambuCloudClient& cloud_client_;
-  PrinterClient& printer_client_;
+  PrinterClientPool& printer_client_pool_;
   P1sCameraClient& camera_client_;
   Ui& ui_;
   const PmuManager& pmu_manager_;

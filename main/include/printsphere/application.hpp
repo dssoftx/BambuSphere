@@ -9,6 +9,7 @@
 #include "printsphere/p1s_camera_client.hpp"
 #include "printsphere/pmu.hpp"
 #include "printsphere/printer_client.hpp"
+#include "printsphere/printer_client_pool.hpp"
 #include "printsphere/setup_portal.hpp"
 #include "printsphere/serial_provisioner.hpp"
 #include "printsphere/ui.hpp"
@@ -26,7 +27,7 @@ class Application {
   ConfigStore config_store_{};
   WifiManager wifi_manager_{};
   BambuCloudClient cloud_client_{};
-  PrinterClient printer_client_{};
+  PrinterClientPool printer_client_pool_{};
   P1sCameraClient camera_client_{};
   Ui ui_{};
   SetupPortal setup_portal_;
@@ -65,6 +66,9 @@ class Application {
   int audio_last_print_error_code_ = 0;
   size_t audio_last_hms_count_ = 0;
   bool audio_state_primed_ = false;
+  // Sentinel (out of the valid 0-15 profile range) so the first loop
+  // iteration always "changes" and harmlessly re-primes audio state.
+  uint8_t last_active_printer_index_ = 0xFF;
 };
 
 }  // namespace printsphere

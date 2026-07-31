@@ -857,7 +857,7 @@ void merge_nozzle_temp_candidates(const cJSON* info_array, int active_nozzle_ind
 
     const float temp = normalize_temperature_candidate(json_number_local(item, "temp", -1000.0f));
     const int id = json_int_local(item, "id", -1);
-    ESP_LOGI(kTag, "[DBG] nozzle info[%d]: id=%d temp=%.1f (raw int=%d)",
+    ESP_LOGD(kTag, "[DBG] nozzle info[%d]: id=%d temp=%.1f (raw int=%d)",
              i, id, temp, (int)temp);
     if (temp <= -999.0f) {
       continue;
@@ -980,7 +980,7 @@ int extract_extruder_snow_tray_now(const cJSON* print) {
     const int snow = snow_item->valueint;
     const int ams_id = (snow >> 8) & 0xFF;
     const int slot_id = snow & 0xFF;
-    ESP_LOGI(kTag, "[DIAG] extruder snow: raw=%d ams_id=%d slot_id=%d", snow, ams_id, slot_id);
+    ESP_LOGD(kTag, "[DIAG] extruder snow: raw=%d ams_id=%d slot_id=%d", snow, ams_id, slot_id);
 
     if (ams_id == 255) return 254;        // External spool.
     if (ams_id >= 128) return ams_id;     // AMS HT (single-tray).
@@ -1850,7 +1850,7 @@ void PrinterClient::handle_report_payload(const char* payload, size_t length) {
         (has_tray_now_update && new_tray_now != previous_tray_now) ||
         (has_tray_tar_update && new_tray_tar != previous_tray_tar);
     if (diag_has_state_fields && diag_has_state_change) {
-      ESP_LOGI(kTag, "[DIAG] local mqtt: gcode=%s stg_cur=%d stage_name=%s ams_status=0x%04X "
+      ESP_LOGD(kTag, "[DIAG] local mqtt: gcode=%s stg_cur=%d stage_name=%s ams_status=0x%04X "
                "ams_change=%d(latch=%d) hw_switch=%d tray_now=%d tray_tar=%d",
                gcode_state.empty() ? "(-)" : gcode_state.c_str(), stage_id,
                stage_name.empty() ? "(-)" : stage_name.c_str(),
@@ -2041,7 +2041,7 @@ void PrinterClient::handle_report_payload(const char* payload, size_t length) {
             if (had_previous_ams && same_ams_tray_diag_state(dt, prev_unit.trays[t])) {
               continue;
             }
-            ESP_LOGI(kTag, "[DIAG]   tray[%d] present=%d type=%s color=0x%08X remain=%d%% active=%d",
+            ESP_LOGD(kTag, "[DIAG]   tray[%d] present=%d type=%s color=0x%08X remain=%d%% active=%d",
                      t, dt.present ? 1 : 0,
                      dt.material_type.empty() ? "(-)" : dt.material_type.c_str(),
                      (unsigned)dt.color_rgba, dt.remain_pct, dt.active ? 1 : 0);
@@ -2089,7 +2089,7 @@ void PrinterClient::handle_report_payload(const char* payload, size_t length) {
               const uint32_t rgba = static_cast<uint32_t>(std::strtoul(color_str.c_str(), &end, 16));
               if (end != color_str.c_str()) ext.color_rgba = rgba;
             }
-            ESP_LOGI(kTag, "[DIAG] vir_slot[255]: fields=%d type=%s name=%s color=0x%08X",
+            ESP_LOGD(kTag, "[DIAG] vir_slot[255]: fields=%d type=%s name=%s color=0x%08X",
                      field_count,
                      ext.material_type.empty() ? "(-)" : ext.material_type.c_str(),
                      ext.material_name.empty() ? "(-)" : ext.material_name.c_str(),
@@ -2361,7 +2361,7 @@ void PrinterClient::handle_report_payload(const char* payload, size_t length) {
       const std::string new_detail = text_string(runtime.detail);
       if (new_raw_status != previous_raw_status || new_raw_stage != previous_raw_stage ||
           new_stage != previous_stage || new_detail != previous_detail) {
-        ESP_LOGI(kTag, "[DIAG] local resolved: status=%s raw_stage=%s stage=%s "
+        ESP_LOGD(kTag, "[DIAG] local resolved: status=%s raw_stage=%s stage=%s "
                  "lifecycle=%s detail=%.60s",
                  new_raw_status.c_str(),
                  new_raw_stage.empty() ? "(-)" : new_raw_stage.c_str(),

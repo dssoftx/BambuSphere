@@ -66,6 +66,7 @@ idf_component_register(
         "src/pmu.cpp"
         "src/p1s_camera_client.cpp"
         "src/printer_client.cpp"
+        "src/printer_client_pool.cpp"
         "src/printer_state.cpp"
         "src/debug_log_buffer.cpp"
         "src/dev_diagnostics.cpp"

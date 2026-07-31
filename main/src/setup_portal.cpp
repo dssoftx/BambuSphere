@@ -11,6 +11,7 @@
 #include "cJSON.h"
 #include "esp_check.h"
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "esp_https_ota.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
@@ -33,6 +34,16 @@ namespace {
 #endif
 
 constexpr char kTag[] = "printsphere.portal";
+
+std::vector<std::string> cloud_bound_serials(const std::vector<PrinterProfile>& profiles) {
+  std::vector<std::string> serials;
+  for (const auto& p : profiles) {
+    if (p.cloud_bound && !p.serial.empty()) {
+      serials.push_back(p.serial);
+    }
+  }
+  return serials;
+}
 constexpr size_t kMaxRequestBody = 4096;
 constexpr char kPortalSessionCookieName[] = "printsphere_portal_session";
 constexpr uint64_t kPortalPinLifetimeMs = 2ULL * 60ULL * 1000ULL;
@@ -867,7 +878,8 @@ bool SetupPortal::is_provisioning_complete() const {
   }
 
   const SourceMode source_mode = config_store_.load_source_mode();
-  const PrinterSnapshot local = printer_client_.snapshot();
+  const uint8_t active_idx = config_store_.load_active_printer_index();
+  const PrinterSnapshot local = printer_client_pool_.client_for(active_idx).snapshot();
   const BambuCloudSnapshot cloud = cloud_client_.snapshot();
   const bool local_connected = local.connection == PrinterConnectionState::kOnline;
   const bool cloud_connected = cloud_portal_ready(cloud);
@@ -1302,7 +1314,8 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   const CloudPortalPresentation cloud_portal =
       cloud_portal_presentation(portal->cloud_client_.refreshed_snapshot());
   const BambuCloudSnapshot& cloud_snapshot = cloud_portal.snapshot;
-  const PrinterSnapshot local_snapshot = portal->printer_client_.snapshot();
+  const PrinterSnapshot local_snapshot =
+      portal->printer_client_pool_.client_for(active_profile.index).snapshot();
   const auto all_cloud_devices = portal->cloud_client_.get_cloud_devices();
   const auto all_profiles = portal->config_store_.load_printer_profiles();
   const std::string effective_printer_serial = [&]() -> std::string {
@@ -1323,7 +1336,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   const bool cloud_password_saved = !cloud.password.empty();
   const bool printer_access_code_saved = !printer.access_code.empty();
   const std::string wifi_ip = portal->wifi_manager_.station_ip();
-  const bool local_configured = portal->printer_client_.is_configured();
+  const bool local_configured = portal->printer_client_pool_.client_for(active_profile.index).is_configured();
   const bool show_connection_steps = wifi_connected && !setup_ap_active;
   const std::string wifi_password_placeholder =
       wifi_password_saved ? "Leave empty to keep saved Wi-Fi password" : "Enter Wi-Fi password";
@@ -3253,10 +3266,12 @@ esp_err_t SetupPortal::handle_health(httpd_req_t* request) {
     body += ",";
     body += "\"wifi_ip\":\"" + json_escape(portal->wifi_manager_.station_ip()) + "\"";
     const BambuCloudSnapshot cloud = portal->cloud_client_.refreshed_snapshot();
-    const PrinterSnapshot local = portal->printer_client_.snapshot();
+    const uint8_t active_idx = portal->config_store_.load_active_printer_index();
+    PrinterClient& active_client = portal->printer_client_pool_.client_for(active_idx);
+    const PrinterSnapshot local = active_client.snapshot();
     append_cloud_status_fields(&body, cloud);
-    append_local_status_fields(&body, local, portal->printer_client_.is_configured());
-    append_mqtt_telemetry_fields(&body, portal->printer_client_.mqtt_telemetry(),
+    append_local_status_fields(&body, local, active_client.is_configured());
+    append_mqtt_telemetry_fields(&body, active_client.mqtt_telemetry(),
                                  portal->cloud_client_.mqtt_telemetry());
   }
   body += "}";
@@ -3446,10 +3461,12 @@ esp_err_t SetupPortal::handle_config_get(httpd_req_t* request) {
   body += (portal->wifi_manager_.is_station_connected() ? "true" : "false");
   body += ",";
   body += "\"wifi_ip\":\"" + json_escape(portal->wifi_manager_.station_ip()) + "\"";
-  const PrinterSnapshot local_snapshot = portal->printer_client_.snapshot();
+  const uint8_t active_idx = portal->config_store_.load_active_printer_index();
+  PrinterClient& active_client = portal->printer_client_pool_.client_for(active_idx);
+  const PrinterSnapshot local_snapshot = active_client.snapshot();
   append_cloud_status_fields(&body, cloud_snapshot);
-  append_local_status_fields(&body, local_snapshot, portal->printer_client_.is_configured());
-  append_mqtt_telemetry_fields(&body, portal->printer_client_.mqtt_telemetry(),
+  append_local_status_fields(&body, local_snapshot, active_client.is_configured());
+  append_mqtt_telemetry_fields(&body, active_client.mqtt_telemetry(),
                                portal->cloud_client_.mqtt_telemetry());
   body += ",\"arc_printing\":\"" + color_to_html_hex(arc_colors.printing) + "\"";
   body += ",\"arc_done\":\"" + color_to_html_hex(arc_colors.done) + "\"";
@@ -3629,7 +3646,8 @@ esp_err_t SetupPortal::handle_config_post(httpd_req_t* request) {
 
   if (!portal->reboot_requested_) {
     portal->reboot_requested_ = true;
-    xTaskCreate(&SetupPortal::reboot_task, "portal_reboot", 2048, portal, 4, nullptr);
+    xTaskCreateWithCaps(&SetupPortal::reboot_task, "portal_reboot", 2048, portal, 4, nullptr,
+                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   }
 
   send_json(request, "{\"status\":\"saved\",\"rebooting\":true}");
@@ -3710,7 +3728,8 @@ esp_err_t SetupPortal::handle_source_mode_post(httpd_req_t* request) {
 
   if (!portal->reboot_requested_) {
     portal->reboot_requested_ = true;
-    xTaskCreate(&SetupPortal::reboot_task, "portal_reboot", 2048, portal, 4, nullptr);
+    xTaskCreateWithCaps(&SetupPortal::reboot_task, "portal_reboot", 2048, portal, 4, nullptr,
+                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   }
 
   send_json(request, "{\"status\":\"saved\",\"rebooting\":true}");
@@ -3741,7 +3760,8 @@ esp_err_t SetupPortal::handle_display_rotation_post(httpd_req_t* request) {
 
   if (!portal->reboot_requested_) {
     portal->reboot_requested_ = true;
-    xTaskCreate(&SetupPortal::reboot_task, "portal_reboot", 2048, portal, 4, nullptr);
+    xTaskCreateWithCaps(&SetupPortal::reboot_task, "portal_reboot", 2048, portal, 4, nullptr,
+                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   }
 
   send_json(request, "{\"status\":\"saved\",\"rebooting\":true}");
@@ -3802,7 +3822,8 @@ esp_err_t SetupPortal::handle_battery_display_post(httpd_req_t* request) {
 
   if (!portal->reboot_requested_) {
     portal->reboot_requested_ = true;
-    xTaskCreate(&SetupPortal::reboot_task, "portal_reboot", 2048, portal, 4, nullptr);
+    xTaskCreateWithCaps(&SetupPortal::reboot_task, "portal_reboot", 2048, portal, 4, nullptr,
+                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   }
 
   send_json(request, "{\"status\":\"saved\",\"rebooting\":true}");
@@ -3835,7 +3856,8 @@ esp_err_t SetupPortal::handle_portal_access_post(httpd_req_t* request) {
 
   if (!portal->reboot_requested_) {
     portal->reboot_requested_ = true;
-    xTaskCreate(&SetupPortal::reboot_task, "portal_reboot", 2048, portal, 4, nullptr);
+    xTaskCreateWithCaps(&SetupPortal::reboot_task, "portal_reboot", 2048, portal, 4, nullptr,
+                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   }
 
   send_json(request, "{\"status\":\"saved\",\"rebooting\":true}");
@@ -3872,7 +3894,8 @@ esp_err_t SetupPortal::handle_ams_display_post(httpd_req_t* request) {
 
   if (!portal->reboot_requested_) {
     portal->reboot_requested_ = true;
-    xTaskCreate(&SetupPortal::reboot_task, "portal_reboot", 2048, portal, 4, nullptr);
+    xTaskCreateWithCaps(&SetupPortal::reboot_task, "portal_reboot", 2048, portal, 4, nullptr,
+                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   }
 
   send_json(request, "{\"status\":\"saved\",\"rebooting\":true}");
@@ -4437,9 +4460,9 @@ esp_err_t SetupPortal::handle_local_connect(httpd_req_t* request) {
                       "save source mode failed");
 
   // Upsert into multi-profile system
+  PrinterProfile profile;
   {
     auto profiles = portal->config_store_.load_printer_profiles();
-    PrinterProfile profile;
     bool found = false;
     for (const auto& p : profiles) {
       if (p.serial == printer.serial) { profile = p; found = true; break; }
@@ -4471,6 +4494,15 @@ esp_err_t SetupPortal::handle_local_connect(httpd_req_t* request) {
       portal->config_store_.save_active_printer_index(profile.index);
     }
   }
+
+  // This may have newly cloud-bound the profile and/or made it active —
+  // keep the cloud session's subscribe list and active serial in sync.
+  {
+    const auto all_profiles = portal->config_store_.load_printer_profiles();
+    const BambuCloudCredentials cloud_creds = portal->config_store_.load_cloud_credentials();
+    portal->cloud_client_.configure(cloud_creds, cloud_bound_serials(all_profiles), profile.serial);
+  }
+
   if (source_mode == SourceMode::kCloudOnly) {
     send_json(
         request,
@@ -4478,14 +4510,15 @@ esp_err_t SetupPortal::handle_local_connect(httpd_req_t* request) {
     return ESP_OK;
   }
 
-  const PrinterSnapshot before = portal->printer_client_.snapshot();
-  portal->printer_client_.configure(printer);
+  PrinterClient& active_client = portal->printer_client_pool_.client_for(profile.index);
+  const PrinterSnapshot before = active_client.snapshot();
+  portal->printer_client_pool_.ensure_started(profile);
   portal->camera_client_.configure(printer);
 
   PrinterSnapshot current = before;
   for (int attempt = 0; attempt < 80; ++attempt) {
     vTaskDelay(pdMS_TO_TICKS(100));
-    current = portal->printer_client_.snapshot();
+    current = active_client.snapshot();
     if (current.connection == PrinterConnectionState::kOnline ||
         current.connection == PrinterConnectionState::kError ||
         current.local_configured != before.local_configured ||
@@ -4605,14 +4638,19 @@ esp_err_t SetupPortal::handle_printers_select(httpd_req_t* request) {
 
   portal->config_store_.save_active_printer_index(new_index);
 
-  // Live-reconnect all clients
+  // Local MQTT already runs persistently for every profile with local config
+  // (see PrinterClientPool) — ensure_started() here is a safety net (no-op
+  // if already connected with the same details), not a reconnect the way
+  // the old single-shared-client model needed on every switch.
   const PrinterConnection conn = selected->to_connection();
   if (conn.is_ready()) {
-    portal->printer_client_.configure(conn);
+    portal->printer_client_pool_.ensure_started(*selected);
     portal->camera_client_.configure(conn);
   }
-  const BambuCloudCredentials cloud_creds = portal->config_store_.load_cloud_credentials();
-  portal->cloud_client_.configure(cloud_creds, selected->serial);
+  // Cloud MQTT is already subscribed to every cloud-bound serial (see
+  // PrinterClientPool's local equivalent above) — switching just re-points
+  // which one is active, no reconnect needed.
+  portal->cloud_client_.set_active_serial(selected->serial);
 
   std::string body = "{\"status\":\"ok\",\"printer\":\"";
   body += json_escape(selected->display_name.empty() ? selected->serial : selected->display_name);
@@ -4680,6 +4718,25 @@ esp_err_t SetupPortal::handle_printers_save(httpd_req_t* request) {
   }
   portal->config_store_.save_printer_profile(profile);
 
+  // Start (or update) this profile's background connection immediately
+  // rather than waiting for next boot, matching every other configured
+  // printer's always-on behavior.
+  if (profile.has_local_config()) {
+    portal->printer_client_pool_.ensure_started(profile);
+  } else {
+    portal->printer_client_pool_.clear(profile.index);
+  }
+
+  // This save may have newly cloud-bound the profile — keep the cloud
+  // session's subscribe list (and active serial, unchanged by this
+  // endpoint) in sync so it starts receiving reports for it immediately.
+  {
+    const auto all_profiles = portal->config_store_.load_printer_profiles();
+    const PrinterConnection active_conn = portal->config_store_.load_active_printer_profile().to_connection();
+    const BambuCloudCredentials cloud_creds = portal->config_store_.load_cloud_credentials();
+    portal->cloud_client_.configure(cloud_creds, cloud_bound_serials(all_profiles), active_conn.serial);
+  }
+
   std::string body = "{\"status\":\"saved\",\"index\":";
   body += std::to_string(profile.index);
   body += "}";
@@ -4712,25 +4769,30 @@ esp_err_t SetupPortal::handle_printers_delete(httpd_req_t* request) {
     return ESP_OK;
   }
 
-  // If the deleted profile was the active one, clear legacy config and disconnect clients
+  // delete_printer_profile() shifts every profile above del_index down by one
+  // slot (and may have renumbered the active index) — resync every pool slot
+  // against the new index->connection mapping, not just the active one,
+  // since a shift changes which printer a given slot number now refers to.
+  const auto remaining = portal->config_store_.load_printer_profiles();
+  portal->printer_client_pool_.sync_with_profiles(remaining);
+
+  // The deleted profile may have been cloud-bound, so the cloud session's
+  // subscribe list always needs recomputing, regardless of whether it was
+  // the active profile.
+  const uint8_t new_active_idx = portal->config_store_.load_active_printer_index();
+  const PrinterProfile* new_active = nullptr;
+  for (const auto& p : remaining) {
+    if (p.index == new_active_idx) { new_active = &p; break; }
+  }
+  const BambuCloudCredentials cloud_creds = portal->config_store_.load_cloud_credentials();
+  portal->cloud_client_.configure(cloud_creds, cloud_bound_serials(remaining),
+                                  new_active != nullptr ? new_active->serial : "");
+
+  // If the deleted profile was the active one, point the camera client at
+  // whichever profile config_store_ picked as the new active index too.
   if (del_index == active_idx) {
-    const PrinterConnection empty_conn;
-    portal->printer_client_.configure(empty_conn);
-    portal->camera_client_.configure(empty_conn);
-    // Reconfigure cloud to drop the serial binding
-    const BambuCloudCredentials cloud_creds = portal->config_store_.load_cloud_credentials();
-    portal->cloud_client_.configure(cloud_creds, "");
-    // Switch active to first remaining profile if any
-    const auto remaining = portal->config_store_.load_printer_profiles();
-    if (!remaining.empty()) {
-      portal->config_store_.save_active_printer_index(remaining.front().index);
-      const PrinterConnection new_conn = remaining.front().to_connection();
-      if (new_conn.is_ready()) {
-        portal->printer_client_.configure(new_conn);
-        portal->camera_client_.configure(new_conn);
-      }
-      portal->cloud_client_.configure(cloud_creds, remaining.front().serial);
-    }
+    portal->camera_client_.configure(new_active != nullptr ? new_active->to_connection()
+                                                            : PrinterConnection{});
   }
 
   send_json(request, "{\"status\":\"deleted\"}");
@@ -4769,12 +4831,12 @@ esp_err_t SetupPortal::handle_printers_clear_local(httpd_req_t* request) {
   target->access_code.clear();
   portal->config_store_.save_printer_profile(*target);
 
-  // If this is the active profile, disconnect local clients
+  // Clear this profile's own background connection — not just the active
+  // one, since every profile now has its own persistent slot.
+  portal->printer_client_pool_.clear(idx);
   const uint8_t active_idx = portal->config_store_.load_active_printer_index();
   if (idx == active_idx) {
-    const PrinterConnection empty_conn;
-    portal->printer_client_.configure(empty_conn);
-    portal->camera_client_.configure(empty_conn);
+    portal->camera_client_.configure(PrinterConnection{});
   }
 
   send_json(request, "{\"status\":\"local_cleared\"}");
@@ -4869,7 +4931,8 @@ esp_err_t SetupPortal::handle_ota_upload(httpd_req_t* request) {
   send_json(request, "{\"status\":\"success\",\"rebooting\":true}");
   if (!portal->reboot_requested_) {
     portal->reboot_requested_ = true;
-    xTaskCreate(&SetupPortal::reboot_task, "portal_reboot", 2048, portal, 4, nullptr);
+    xTaskCreateWithCaps(&SetupPortal::reboot_task, "portal_reboot", 2048, portal, 4, nullptr,
+                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   }
   return ESP_OK;
 }
@@ -4940,7 +5003,8 @@ esp_err_t SetupPortal::handle_ota_url(httpd_req_t* request) {
   }
 
   ESP_LOGI(kTag, "Starting OTA URL task: %s", url.c_str());
-  xTaskCreate(&SetupPortal::ota_url_task, "ota_url", 8192, portal, 5, nullptr);
+  xTaskCreateWithCaps(&SetupPortal::ota_url_task, "ota_url", 8192, portal, 5, nullptr,
+                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
   std::string body = "{\"status\":\"started\",\"url\":\"";
   body += json_escape(url);
@@ -5067,7 +5131,8 @@ void SetupPortal::ota_url_task(void* context) {
   }
   if (!portal->reboot_requested_) {
     portal->reboot_requested_ = true;
-    xTaskCreate(&SetupPortal::reboot_task, "portal_reboot", 2048, portal, 4, nullptr);
+    xTaskCreateWithCaps(&SetupPortal::reboot_task, "portal_reboot", 2048, portal, 4, nullptr,
+                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   }
   vTaskDelete(nullptr);
 }

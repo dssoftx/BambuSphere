@@ -169,7 +169,18 @@ class BambuCloudClient {
   };
 
   void set_config_store(const ConfigStore* config_store) { config_store_ = config_store; }
-  void configure(BambuCloudCredentials credentials, std::string printer_serial);
+  // `cloud_bound_serials` is every printer profile bound to this account that
+  // should stay subscribed on this one MQTT session in the background;
+  // `active_serial` is the currently displayed printer (scopes REST
+  // preview/task-history fetches and is the default command target).
+  void configure(BambuCloudCredentials credentials, std::vector<std::string> cloud_bound_serials,
+                 std::string active_serial);
+  // Switches which printer is "active" without tearing down the MQTT
+  // session — every cloud-bound serial is already subscribed (see
+  // configure()), so this just re-points REST fetches/command targeting and
+  // waits for the next report on the already-open subscription instead of a
+  // fresh reconnect.
+  void set_active_serial(std::string serial);
   void set_network_ready(bool ready) { network_ready_.store(ready); }
   // Invoked whenever a `client.connected` / `client.disconnected` event for the
   // currently-bound printer arrives on the Bambu Cloud MQTT feed. Used by the
@@ -219,7 +230,9 @@ class BambuCloudClient {
                                  void* event_data);
   static void task_entry(void* context);
 
-  void apply_configuration(BambuCloudCredentials credentials, std::string printer_serial);
+  void apply_configuration(BambuCloudCredentials credentials,
+                           std::vector<std::string> cloud_bound_serials, std::string active_serial);
+  void apply_active_serial(std::string serial);
   void handle_mqtt_event(esp_mqtt_event_handle_t event);
   void stop_mqtt_client();
   void process_pending_chamber_light_command();
@@ -302,7 +315,14 @@ class BambuCloudClient {
   std::vector<CloudDeviceInfo> cloud_devices_{};
   mutable std::mutex pending_config_mutex_{};
   BambuCloudCredentials pending_credentials_{};
+  std::vector<std::string> pending_cloud_bound_serials_{};
   std::string pending_printer_serial_{};
+  // Every cloud-bound printer's serial that should stay subscribed on this
+  // session in the background (set by configure()), independent of which one
+  // is currently active/displayed.
+  std::vector<std::string> cloud_bound_serials_{};
+  std::string pending_active_serial_{};
+  std::atomic<bool> active_serial_switch_requested_{false};
   const ConfigStore* config_store_ = nullptr;
   BambuCloudCredentials credentials_{};
   std::string requested_serial_{};

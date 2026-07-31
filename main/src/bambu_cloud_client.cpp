@@ -514,6 +514,45 @@ bool has_text(const std::array<char, N>& value) {
   return value[0] != '\0';
 }
 
+// Resets the per-printer telemetry fields of a live-runtime struct to their
+// "no data yet" defaults, leaving session/identity fields (configured,
+// connected, resolved_serial, detail, ...) for the caller to set. Shared by
+// apply_cloud_session_state() (session lifecycle transitions) and
+// apply_active_serial() (switching which printer is active) so both agree on
+// exactly what counts as stale telemetry.
+void clear_live_telemetry(BambuCloudClient::CloudLiveRuntimeState& live) {
+  live.live_data_last_update_ms = 0;
+  live.lifecycle = PrintLifecycleState::kUnknown;
+  live.progress_percent = 0.0f;
+  live.progress_is_download_related = false;
+  live.nozzle_temp_c = 0.0f;
+  live.nozzle_temp_last_update_ms = 0;
+  live.bed_temp_c = 0.0f;
+  live.bed_temp_last_update_ms = 0;
+  live.chamber_temp_c = 0.0f;
+  live.chamber_temp_last_update_ms = 0;
+  live.secondary_nozzle_temp_c = 0.0f;
+  live.secondary_nozzle_temp_last_update_ms = 0;
+  live.non_error_stop = false;
+  live.remaining_seconds = 0;
+  live.current_layer = 0;
+  live.total_layers = 0;
+  live.print_error_code = 0;
+  live.hw_switch_state = -1;
+  live.tray_now = -1;
+  live.tray_tar = -1;
+  live.ams.reset();
+  live.hms_codes.clear();
+  live.hms_alert_count = 0;
+  live.has_error = false;
+  live.chamber_light_pending = false;
+  live.chamber_light_pending_since_ms = 0;
+  copy_text(&live.job_name, "");
+  copy_text(&live.raw_status, "");
+  copy_text(&live.raw_stage, "");
+  copy_text(&live.stage, "");
+}
+
 bool is_recent_live_data(uint64_t last_update_ms) {
   if (last_update_ms == 0) {
     return false;
@@ -1580,7 +1619,7 @@ int extract_extruder_snow_tray_now(const cJSON* source) {
     const int snow = snow_item->valueint;
     const int ams_id = (snow >> 8) & 0xFF;
     const int slot_id = snow & 0xFF;
-    ESP_LOGI(kTag, "[DIAG] cloud extruder snow: raw=%d ams_id=%d slot_id=%d", snow, ams_id, slot_id);
+    ESP_LOGD(kTag, "[DIAG] cloud extruder snow: raw=%d ams_id=%d slot_id=%d", snow, ams_id, slot_id);
 
     if (ams_id == 255) return 254;
     if (ams_id >= 128) return ams_id;
@@ -1830,27 +1869,94 @@ const char* to_string(CloudSetupStage stage) {
   }
 }
 
-void BambuCloudClient::configure(BambuCloudCredentials credentials, std::string printer_serial) {
+void BambuCloudClient::configure(BambuCloudCredentials credentials,
+                                 std::vector<std::string> cloud_bound_serials,
+                                 std::string active_serial) {
   const bool can_apply_inline =
       task_handle_ == nullptr || xTaskGetCurrentTaskHandle() == task_handle_;
   if (!can_apply_inline) {
     {
       std::lock_guard<std::mutex> lock(pending_config_mutex_);
       pending_credentials_ = std::move(credentials);
-      pending_printer_serial_ = std::move(printer_serial);
+      pending_cloud_bound_serials_ = std::move(cloud_bound_serials);
+      pending_printer_serial_ = std::move(active_serial);
     }
     reconfigure_requested_ = true;
     xTaskNotifyGive(task_handle_);
     return;
   }
 
-  apply_configuration(std::move(credentials), std::move(printer_serial));
+  apply_configuration(std::move(credentials), std::move(cloud_bound_serials),
+                      std::move(active_serial));
+}
+
+void BambuCloudClient::set_active_serial(std::string serial) {
+  const bool can_apply_inline =
+      task_handle_ == nullptr || xTaskGetCurrentTaskHandle() == task_handle_;
+  if (!can_apply_inline) {
+    {
+      std::lock_guard<std::mutex> lock(pending_config_mutex_);
+      pending_active_serial_ = std::move(serial);
+    }
+    active_serial_switch_requested_ = true;
+    xTaskNotifyGive(task_handle_);
+    return;
+  }
+
+  apply_active_serial(std::move(serial));
+}
+
+void BambuCloudClient::apply_active_serial(std::string serial) {
+  requested_serial_ = std::move(serial);
+  // Set resolved_serial_ to match immediately rather than clearing it: an
+  // empty resolved_serial_ here would make fetch_bindings()'s next periodic
+  // refresh see best_serial != resolved_serial_ and treat it as a real
+  // "the bound printer changed" event, calling stop_mqtt_client() and
+  // tearing down/rebuilding the whole session (dropping every background
+  // printer's subscription) a few seconds after every switch.
+  resolved_serial_ = requested_serial_;
+  // The MQTT session itself stays up — every cloud-bound serial is already
+  // subscribed (see MQTT_EVENT_CONNECTED) — only the report/request topics
+  // used for REST scoping and command targeting follow the new active
+  // serial. This intentionally mirrors what ensure_mqtt_client_started()
+  // would compute so it does not see a "topic changed" and rebuild the
+  // client out from under us.
+  mqtt_report_topic_ = requested_serial_.empty() ? std::string{} : "device/" + requested_serial_ + "/report";
+  mqtt_request_topic_ = requested_serial_.empty() ? std::string{} : "device/" + requested_serial_ + "/request";
+
+  // Live telemetry for the previously-active serial doesn't carry over —
+  // reset just the live (MQTT) runtime to a "waiting for data" placeholder;
+  // REST/session state (login, bindings) is account-level and untouched by a
+  // printer switch. The next report on the already-open/subscribed session
+  // repopulates this, typically within the printer's normal report cadence
+  // rather than a fresh reconnect.
+  {
+    CloudLiveRuntimeState live = live_runtime_copy();
+    live.connected = mqtt_connected_.load();
+    live.setup_stage =
+        mqtt_connected_.load() ? CloudSetupStage::kConnectingMqtt : CloudSetupStage::kIdle;
+    live.last_update_ms = now_ms();
+    clear_live_telemetry(live);
+    copy_text(&live.detail, "Switched to this printer - waiting for its next cloud report");
+    copy_text(&live.resolved_serial, requested_serial_);
+    store_live_runtime(std::move(live), false);
+  }
+  publish_combined_snapshot();
+  received_live_payload_ = false;
+  initial_sync_sent_ = false;
+  delayed_start_sent_ = false;
+  initial_sync_tick_ = 0;
+  if (mqtt_connected_.load() && mqtt_subscription_acknowledged_.load()) {
+    request_initial_sync();
+  }
 }
 
 void BambuCloudClient::apply_configuration(BambuCloudCredentials credentials,
+                                           std::vector<std::string> cloud_bound_serials,
                                            std::string printer_serial) {
   stop_mqtt_client();
   credentials_ = std::move(credentials);
+  cloud_bound_serials_ = std::move(cloud_bound_serials);
   requested_serial_ = std::move(printer_serial);
   resolved_serial_.clear();
   cached_preview_url_.clear();
@@ -2060,36 +2166,7 @@ void BambuCloudClient::apply_cloud_session_state(bool configured, bool connected
     copy_text(&live.resolved_serial, serial);
   }
   if (clear_live_state) {
-    live.live_data_last_update_ms = 0;
-    live.lifecycle = PrintLifecycleState::kUnknown;
-    live.progress_percent = 0.0f;
-    live.progress_is_download_related = false;
-    live.nozzle_temp_c = 0.0f;
-    live.nozzle_temp_last_update_ms = 0;
-    live.bed_temp_c = 0.0f;
-    live.bed_temp_last_update_ms = 0;
-    live.chamber_temp_c = 0.0f;
-    live.chamber_temp_last_update_ms = 0;
-    live.secondary_nozzle_temp_c = 0.0f;
-    live.secondary_nozzle_temp_last_update_ms = 0;
-    live.non_error_stop = false;
-    live.remaining_seconds = 0;
-    live.current_layer = 0;
-    live.total_layers = 0;
-    live.print_error_code = 0;
-    live.hw_switch_state = -1;
-    live.tray_now = -1;
-    live.tray_tar = -1;
-    live.ams.reset();
-    live.hms_codes.clear();
-    live.hms_alert_count = 0;
-    live.has_error = false;
-    live.chamber_light_pending = false;
-    live.chamber_light_pending_since_ms = 0;
-    copy_text(&live.job_name, "");
-    copy_text(&live.raw_status, "");
-    copy_text(&live.raw_stage, "");
-    copy_text(&live.stage, "");
+    clear_live_telemetry(live);
   }
   copy_text(&live.detail, detail);
   store_live_runtime(std::move(live), false);
@@ -2356,12 +2433,28 @@ void BambuCloudClient::handle_mqtt_event(esp_mqtt_event_handle_t event) {
       initial_sync_sent_ = false;
       delayed_start_sent_ = false;
       initial_sync_tick_ = 0;
-      const int msg_id = esp_mqtt_client_subscribe(mqtt_client_, mqtt_report_topic_.c_str(), 1);
-      if (msg_id >= 0) {
-        ESP_LOGI(kTag, "Cloud MQTT subscribe queued for %s (msg_id=%d)",
-                 mqtt_report_topic_.c_str(), msg_id);
-      } else {
-        ESP_LOGW(kTag, "Cloud MQTT subscribe failed for %s", mqtt_report_topic_.c_str());
+      // Subscribe to every cloud-bound printer's report topic on this one
+      // account-level session, not just the active one, so switching the
+      // active printer later (see set_active_serial()) never needs a
+      // resubscribe/reconnect.
+      {
+        const std::string active_serial =
+            !resolved_serial_.empty() ? resolved_serial_ : requested_serial_;
+        std::vector<std::string> subscribe_serials = cloud_bound_serials_;
+        if (!active_serial.empty() &&
+            std::find(subscribe_serials.begin(), subscribe_serials.end(), active_serial) ==
+                subscribe_serials.end()) {
+          subscribe_serials.push_back(active_serial);
+        }
+        for (const auto& serial : subscribe_serials) {
+          const std::string topic = "device/" + serial + "/report";
+          const int msg_id = esp_mqtt_client_subscribe(mqtt_client_, topic.c_str(), 1);
+          if (msg_id >= 0) {
+            ESP_LOGI(kTag, "Cloud MQTT subscribe queued for %s (msg_id=%d)", topic.c_str(), msg_id);
+          } else {
+            ESP_LOGW(kTag, "Cloud MQTT subscribe failed for %s", topic.c_str());
+          }
+        }
       }
       CloudLiveRuntimeState runtime = live_runtime_copy();
       runtime.configured = true;
@@ -2902,7 +2995,7 @@ void BambuCloudClient::handle_report_payload(const char* payload, size_t length)
 
     // [DIAG] Log every incoming cloud MQTT print payload summary.
     if (has_status_update) {
-      ESP_LOGI(kTag, "[DIAG] cloud mqtt: status=%s stage=%s prev_lifecycle=%s",
+      ESP_LOGD(kTag, "[DIAG] cloud mqtt: status=%s stage=%s prev_lifecycle=%s",
                status_text.empty() ? "(-)" : status_text.c_str(),
                stage_text.empty() ? "(-)" : stage_text.c_str(),
                to_string(previous_lifecycle));
@@ -3269,7 +3362,7 @@ void BambuCloudClient::handle_report_payload(const char* payload, size_t length)
 
     // [DIAG] Log resolved cloud state on change.
     if (runtime.lifecycle != previous_lifecycle || has_status_update) {
-      ESP_LOGI(kTag, "[DIAG] cloud resolved: status=%s stage=%s lifecycle=%s detail=%.60s",
+      ESP_LOGD(kTag, "[DIAG] cloud resolved: status=%s stage=%s lifecycle=%s detail=%.60s",
                text_string(runtime.raw_status).c_str(),
                text_string(runtime.raw_stage).empty() ? "(-)" : text_string(runtime.raw_stage).c_str(),
                to_string(runtime.lifecycle),
@@ -3405,13 +3498,16 @@ void BambuCloudClient::task_loop() {
 
     if (reconfigure_requested_.exchange(false)) {
       BambuCloudCredentials credentials;
+      std::vector<std::string> cloud_bound_serials;
       std::string printer_serial;
       {
         std::lock_guard<std::mutex> lock(pending_config_mutex_);
         credentials = std::move(pending_credentials_);
+        cloud_bound_serials = std::move(pending_cloud_bound_serials_);
         printer_serial = std::move(pending_printer_serial_);
       }
-      apply_configuration(std::move(credentials), std::move(printer_serial));
+      apply_configuration(std::move(credentials), std::move(cloud_bound_serials),
+                          std::move(printer_serial));
       last_preview_fetch_tick = 0;
       preview_retry_not_before_tick = 0;
       last_preview_fetch_enabled = false;
@@ -3422,8 +3518,25 @@ void BambuCloudClient::task_loop() {
       continue;
     }
 
+    if (active_serial_switch_requested_.exchange(false)) {
+      std::string new_active_serial;
+      {
+        std::lock_guard<std::mutex> lock(pending_config_mutex_);
+        new_active_serial = std::move(pending_active_serial_);
+      }
+      apply_active_serial(std::move(new_active_serial));
+      continue;
+    }
+
     if (reload_requested_.exchange(false) && config_store_ != nullptr) {
-      apply_configuration(config_store_->load_cloud_credentials(),
+      const auto profiles = config_store_->load_printer_profiles();
+      std::vector<std::string> cloud_bound_serials;
+      for (const auto& p : profiles) {
+        if (p.cloud_bound && !p.serial.empty()) {
+          cloud_bound_serials.push_back(p.serial);
+        }
+      }
+      apply_configuration(config_store_->load_cloud_credentials(), std::move(cloud_bound_serials),
                           config_store_->load_active_printer_profile().serial);
       last_preview_fetch_tick = 0;
       preview_retry_not_before_tick = 0;
@@ -3595,6 +3708,14 @@ void BambuCloudClient::task_loop() {
       // emits a real `client.connected` event or we receive a live payload.
       // Without this the local task keeps hammering TLS handshakes against
       // an unreachable LAN host every 30-60 s.
+      //
+      // Known tradeoff: stop_mqtt_client() below tears down the whole
+      // account-level session, which now also drops every background
+      // printer's subscription (see MQTT_EVENT_CONNECTED), not just the
+      // active one — this timeout is scoped to the active serial's REST
+      // sync only. Acceptable for now since it only fires when the active
+      // printer itself is unreachable; a per-serial timeout would need
+      // deeper changes to this backoff state machine.
       {
         CloudRestRuntimeState rest = rest_runtime_copy();
         if (rest.printer_online) {

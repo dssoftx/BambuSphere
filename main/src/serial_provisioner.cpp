@@ -93,8 +93,12 @@ esp_err_t SerialProvisioner::start() {
     return ESP_FAIL;
   }
 
-  const BaseType_t created =
-      xTaskCreate(task_entry, "printsphere_improv", kTaskStackBytes / sizeof(StackType_t), this, 4, nullptr);
+  // Runs for the app's entire lifetime polling UART/USB serial; not
+  // latency/DMA sensitive, so the stack lives in PSRAM (see printer_client.cpp
+  // for the same pattern).
+  const BaseType_t created = xTaskCreateWithCaps(
+      task_entry, "printsphere_improv", kTaskStackBytes / sizeof(StackType_t), this, 4, nullptr,
+      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (created != pdPASS) {
     return ESP_ERR_NO_MEM;
   }

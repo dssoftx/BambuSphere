@@ -184,22 +184,33 @@ class LvglLockGuard {
 
   ~LvglLockGuard() {
     if (locked_) {
+      close_current_phase();
       const uint32_t held_ms = esp_log_timestamp() - acquired_ts_;
-      const char* last_phase = phase_;
-      const uint32_t since_phase = phase_ts_ != 0 ? (esp_log_timestamp() - phase_ts_) : 0;
       active_ = previous_active_;
       bsp_display_unlock();
       if (held_ms > 80) {
-        ESP_LOGW(kTag,
-                 "LVGL lock held %lums (caller=%s seq=%lu phase=%s phase_ms=%lu)",
+        // Per-phase breakdown (not just the last phase) — the slow phase is
+        // often earlier in the sequence (e.g. "temps"/"ams") even though the
+        // guard is destroyed while sitting in a later, fast phase like
+        // "page_visibility", which the old single-phase report couldn't show.
+        char breakdown[192];
+        size_t off = 0;
+        for (uint8_t i = 0; i < phase_count_ && off + 1 < sizeof(breakdown); ++i) {
+          const int written = std::snprintf(breakdown + off, sizeof(breakdown) - off, "%s%s=%lu",
+                                            i == 0 ? "" : " ", phases_[i].name,
+                                            (unsigned long)phases_[i].duration_ms);
+          if (written <= 0) break;
+          off += static_cast<size_t>(written);
+        }
+        ESP_LOGW(kTag, "LVGL lock held %lums (caller=%s seq=%lu) phases: %s",
                  (unsigned long)held_ms, caller_, (unsigned long)acquire_seq_,
-                 last_phase != nullptr ? last_phase : "-",
-                 (unsigned long)since_phase);
+                 phase_count_ > 0 ? breakdown : "(none)");
       }
     }
   }
 
   void mark_phase(const char* phase) {
+    close_current_phase();
     phase_ = phase;
     phase_ts_ = esp_log_timestamp();
   }
@@ -217,6 +228,22 @@ class LvglLockGuard {
   static uint32_t total_acquires_;
 
  private:
+  void close_current_phase() {
+    if (phase_ == nullptr || phase_count_ >= kMaxPhases) {
+      return;
+    }
+    phases_[phase_count_].name = phase_;
+    phases_[phase_count_].duration_ms = esp_log_timestamp() - phase_ts_;
+    ++phase_count_;
+    phase_ = nullptr;
+  }
+
+  struct PhaseRecord {
+    const char* name = nullptr;
+    uint32_t duration_ms = 0;
+  };
+  static constexpr uint8_t kMaxPhases = 10;
+
   const char* caller_ = "?";
   const char* phase_ = nullptr;
   uint32_t acquired_ts_ = 0;
@@ -224,6 +251,8 @@ class LvglLockGuard {
   uint32_t acquire_seq_ = 0;
   bool locked_ = false;
   LvglLockGuard* previous_active_ = nullptr;
+  PhaseRecord phases_[kMaxPhases]{};
+  uint8_t phase_count_ = 0;
 
   static thread_local LvglLockGuard* active_;
 };
@@ -1880,7 +1909,7 @@ void Ui::apply_snapshot_locked(const PrinterSnapshot& snapshot, bool force_ring_
     last_diag_status_ = status_text;
     last_diag_detail_ = detail;
     last_diag_stage_ = snapshot.stage;
-    ESP_LOGI(kTag, "[DIAG] display: status=%s stage=%s detail=%.60s lifecycle=%s",
+    ESP_LOGD(kTag, "[DIAG] display: status=%s stage=%s detail=%.60s lifecycle=%s",
              status_text.c_str(), snapshot.stage.c_str(),
              detail.empty() ? "(-)" : detail.c_str(),
              to_string(snapshot.lifecycle));
