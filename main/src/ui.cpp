@@ -1948,8 +1948,9 @@ void Ui::apply_snapshot_locked(const PrinterSnapshot& snapshot, bool force_ring_
                   static_cast<unsigned>(snapshot.dev_free_heap_bytes / 1024U));
     set_label_text_if_changed(dev_stats_left_label_, left_text);
 
-    char right_text[16];
-    std::snprintf(right_text, sizeof(right_text), "%.0f\xC2\xB0" "C",
+    char right_text[24];
+    std::snprintf(right_text, sizeof(right_text), "%.1fM \xC2\xB7 %.0f\xC2\xB0" "C",
+                  static_cast<double>(snapshot.dev_free_psram_bytes) / (1024.0 * 1024.0),
                   static_cast<double>(snapshot.dev_mcu_temp_c));
     set_label_text_if_changed(dev_stats_right_label_, right_text);
   }

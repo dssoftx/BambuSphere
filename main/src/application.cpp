@@ -733,6 +733,7 @@ void Application::run() {
     if (dev_diag.available) {
       snapshot.dev_cpu_usage_percent = dev_diag.cpu_usage_percent;
       snapshot.dev_free_heap_bytes = dev_diag.free_heap_bytes;
+      snapshot.dev_free_psram_bytes = dev_diag.free_psram_bytes;
       snapshot.dev_mcu_temp_c = dev_diag.mcu_temp_c;
     }
 

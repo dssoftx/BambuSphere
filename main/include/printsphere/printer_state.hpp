@@ -173,6 +173,7 @@ struct PrinterSnapshot {
   bool dev_diagnostics_available = false;
   uint8_t dev_cpu_usage_percent = 0;
   uint32_t dev_free_heap_bytes = 0;
+  uint32_t dev_free_psram_bytes = 0;
   float dev_mcu_temp_c = 0.0f;
   bool has_error = false;
   bool print_active = false;

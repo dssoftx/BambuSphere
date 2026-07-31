@@ -60,8 +60,9 @@ Combined with the hardware axis, there are 4 build directories in total:
 
 `PRINTSPHERE_DEV_DIAGNOSTICS` (`off` by default, `on` to enable) adds an
 on-screen overlay to the main page for testing firmware performance: CPU
-usage and free heap top-left of the printer name, MCU temperature top-right
-(`main/src/dev_diagnostics.cpp`). It's off by default because it enables
+usage and free internal RAM top-left of the printer name, free PSRAM and MCU
+temperature top-right (`main/src/dev_diagnostics.cpp`). It's off by default
+because it enables
 FreeRTOS per-task run-time stats and periodic temperature-sensor polling,
 which have a small but real always-on cost that normal (including beta and
 h2x2d) builds shouldn't pay.

@@ -88,6 +88,8 @@ DevDiagnosticsSnapshot DevDiagnostics::sample() {
   snapshot.cpu_usage_percent = compute_cpu_usage_percent();
   snapshot.free_heap_bytes =
       static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+  snapshot.free_psram_bytes =
+      static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
   float celsius = 0.0f;
   if (temperature_sensor_get_celsius(s_tsens, &celsius) == ESP_OK) {
