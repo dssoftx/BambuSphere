@@ -457,7 +457,7 @@
               </div>
               <div class="fact">
                 <span>Version</span>
-                <strong id="firmware-version">v1.7.2</strong>
+                <strong id="firmware-version">v1.8.0</strong>
               </div>
               <div class="fact">
                 <span>Flash offset</span>
@@ -489,7 +489,7 @@
               alt="BambuSphere circular display device"
             >
             <div class="caption">
-              <strong id="caption-version">Stable v1.7.2</strong>
+              <strong id="caption-version">Stable v1.8.0</strong>
               <span id="caption-path">release/initial/printsphere_full.bin</span>
             </div>
           </aside>
@@ -530,13 +530,13 @@
     <script>
       const firmwares = [
         {
-          label: "Stable v1.7.2 (1.75 AMOLED)",
+          label: "Stable v1.8.0 (1.75 AMOLED)",
           channel: "Stable",
-          version: "v1.7.2",
+          version: "v1.8.0",
           path: "../release/initial/printsphere_full.bin",
           displayPath: "release/initial/printsphere_full.bin",
           otaUrl: "https://github.com/dssoftx/BambuSphere/blob/main/release/ota/printsphere_ota.bin",
-          note: "Factory flash erases device data before installing v1.7.2. Keep the USB cable connected after the flash: the Wi-Fi picker appears automatically, so the setup hotspot is only needed as a fallback. Promoted from the v1.7.2 beta after testing: fixes the right/secondary nozzle temperature freezing after its first reading instead of updating live, loosens the local-MQTT watchdog for models that require Developer Mode for local status, and auto-applies your browser's detected time zone on first Web Config visit. See the v1.7.2 release notes for details. If your printer is an H2 family model or X2D, use the dedicated v1.7.2-2series build below instead.",
+          note: "Factory flash erases device data before installing v1.8.0. Keep the USB cable connected after the flash: the Wi-Fi picker appears automatically, so the setup hotspot is only needed as a fallback. Promoted from the v1.8.0 beta after testing: every configured printer now stays connected in the background at all times - local MQTT for every configured printer, and Bambu Cloud subscribed to every cloud-bound printer on one session - so switching the active printer on-screen is instant instead of waiting on a fresh reconnect. Also a round of performance work: more internal RAM freed by moving long-lived task stacks to PSRAM, verbose TLS/diagnostic logging trimmed, and the display refresh rate tuned from 60 to 30 Hz to cut CPU load. See the v1.8.0 release notes for details. If your printer is an H2 family model or X2D, use the dedicated v1.8.0-2series build below instead.",
         },
         {
           label: 'Stable v1.6.2 (2.8" LCD)',
@@ -548,31 +548,13 @@
           note: 'Factory flash image for the ESP32-S3-Touch-LCD-2.8C hardware variant on v1.6.2. Keep the USB cable connected after the flash: the Wi-Fi picker appears automatically, so the setup hotspot is only needed as a fallback.',
         },
         {
-          label: "Stable v1.7.2-2series (H2/X2D, 1.75 AMOLED)",
+          label: "Stable v1.8.0-2series (H2/X2D, 1.75 AMOLED)",
           channel: "Stable",
-          version: "v1.7.2-2series",
+          version: "v1.8.0-2series",
           path: "../release/h2x2d/initial/printsphere_full.bin",
           displayPath: "release/h2x2d/initial/printsphere_full.bin",
           otaUrl: "https://github.com/dssoftx/BambuSphere/blob/main/release/h2x2d/ota/printsphere_ota.bin",
-          note: "Factory flash erases device data before installing v1.7.2-2series. Keep the USB cable connected after the flash: the Wi-Fi picker appears automatically, so the setup hotspot is only needed as a fallback. Built specifically for the H2 family and X2D: Connection Mode defaults to Local Only on a fresh config (Cloud/Hybrid remain selectable in Web Config), and Web Config shows a warning about known issues on this printer family - random MQTT disconnects, the ESP32 running warm to the touch, and Hybrid/Cloud mode being slow without Developer Mode enabled on the printer. Promoted from beta after testing. See the v1.7.2 release notes for details.",
-        },
-        {
-          label: "Beta v1.8.0 (1.75 AMOLED)",
-          channel: "Beta",
-          version: "v1.8.0",
-          path: "../release/beta/printsphere_full.bin",
-          displayPath: "release/beta/printsphere_full.bin",
-          otaUrl: "https://github.com/dssoftx/BambuSphere/blob/main/release/beta/printsphere_ota.bin",
-          note: "Printers now stay connected in the background at all times - local MQTT for every configured printer, and Bambu Cloud subscribed to every cloud-bound printer on one session - so switching the active printer on-screen is instant instead of waiting on a fresh reconnect. Also a round of performance work: more internal RAM freed by moving long-lived task stacks to PSRAM, verbose TLS/diagnostic logging trimmed, and the display refresh rate tuned from 60 to 30 Hz to cut CPU load. See the v1.8.0 release notes for details. If your printer is an H2 family model or X2D, consider the dedicated v1.8.0-2series build below instead.",
-        },
-        {
-          label: "Beta v1.8.0-2series (H2/X2D, 1.75 AMOLED)",
-          channel: "Beta",
-          version: "v1.8.0-2series",
-          path: "../release/h2x2d/beta/printsphere_full.bin",
-          displayPath: "release/h2x2d/beta/printsphere_full.bin",
-          otaUrl: "https://github.com/dssoftx/BambuSphere/blob/main/release/h2x2d/beta/printsphere_ota.bin",
-          note: "Same always-on multi-printer background connections and performance work as the v1.8.0 beta above, built specifically for the H2 family and X2D: Connection Mode defaults to Local Only on a fresh config (Cloud/Hybrid remain selectable in Web Config), and Web Config shows a warning about known issues on this printer family - random MQTT disconnects, the ESP32 running warm to the touch, and Hybrid/Cloud mode being slow without Developer Mode enabled on the printer. See the v1.8.0 release notes for details.",
+          note: "Factory flash erases device data before installing v1.8.0-2series. Keep the USB cable connected after the flash: the Wi-Fi picker appears automatically, so the setup hotspot is only needed as a fallback. Built specifically for the H2 family and X2D: Connection Mode defaults to Local Only on a fresh config (Cloud/Hybrid remain selectable in Web Config), and Web Config shows a warning about known issues on this printer family - random MQTT disconnects, the ESP32 running warm to the touch, and Hybrid/Cloud mode being slow without Developer Mode enabled on the printer. Promoted from beta after testing: same always-on multi-printer background connections and performance work as the mainline v1.8.0 above. See the v1.8.0 release notes for details.",
         },
         {
           label: "Dev (auto-built from latest main, 1.75 AMOLED)",

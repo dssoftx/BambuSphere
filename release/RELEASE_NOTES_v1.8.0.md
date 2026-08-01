@@ -1,12 +1,12 @@
-# BambuSphere v1.8.0 (beta)
+# BambuSphere v1.8.0
 
 Feature release on top of v1.7.2: every configured printer now stays
 connected in the background at all times, so switching the active printer
 on-screen is instant instead of waiting on a fresh reconnect. Paired with a
 round of performance work driven by the same change, since more concurrent
 connections meant internal RAM and CPU headroom mattered more than before.
-Published as a beta while this gets more real-world testing across
-different printer counts and network conditions.
+Promoted to Stable after live device testing confirmed it's performant,
+stable, and well optimised.
 
 ## Release Scope
 
