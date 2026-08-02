@@ -46,7 +46,7 @@ firmware can connect to.
 | Mainline (default) | `all` (or omit the flag) | Connection Mode defaults to Hybrid, as today. |
 | H2 family / X2D | `h2x2d` | Connection Mode defaults to Local Only on a fresh config (Cloud/Hybrid stay selectable); Web Config shows a warning banner about known issues on this printer family (random disconnects, ESP32 running warm, Hybrid/Cloud lag without Developer Mode). |
 
-Setting `PRINTSPHERE_PRINTER_TARGET=h2x2d` also appends `-h2x2d` to the
+Setting `PRINTSPHERE_PRINTER_TARGET=h2x2d` also appends `-localnative` to the
 release version suffix and nests that variant's release artifacts under an
 `h2x2d/` subdirectory (e.g. `release/h2x2d/` for AMOLED 1.75,
 `release/2.8c/h2x2d/` for LCD 2.8C) so they never collide with the mainline
@@ -223,13 +223,13 @@ python tools/package_initial_flash.py --build-dir build-lcd_2_8c --release-root 
 AMOLED 1.75, H2/X2D:
 
 ```powershell
-python tools/package_initial_flash.py --build-dir build-amoled_1_75-h2x2d --release-root release/h2x2d --version v1.7.0-h2x2d
+python tools/package_initial_flash.py --build-dir build-amoled_1_75-h2x2d --release-root release/h2x2d --version v1.7.0-localnative
 ```
 
 LCD 2.8C, H2/X2D:
 
 ```powershell
-python tools/package_initial_flash.py --build-dir build-lcd_2_8c-h2x2d --release-root release/2.8c/h2x2d --version v1.7.0-2.8c-h2x2d
+python tools/package_initial_flash.py --build-dir build-lcd_2_8c-h2x2d --release-root release/2.8c/h2x2d --version v1.7.0-2.8c-localnative
 ```
 
 ## Initial image versus OTA image
