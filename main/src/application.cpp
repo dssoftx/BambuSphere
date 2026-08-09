@@ -297,6 +297,8 @@ void Application::run() {
   ui_.set_arc_color_scheme(config_store_.load_arc_color_scheme());
   ui_.set_display_rotation(config_store_.load_display_rotation());
   ui_.set_battery_display_policy(config_store_.load_battery_display_policy());
+  ui_.set_clock_format_24h(config_store_.load_clock_format_24h());
+  ui_.set_show_layer_lines(config_store_.load_show_layer_lines_enabled());
   ui_.set_initial_brightness_percent(config_store_.load_display_brightness_percent());
   filament_wake_enabled_ = config_store_.load_filament_wake_enabled();
   filament_anim_enabled_ = config_store_.load_filament_anim_enabled();

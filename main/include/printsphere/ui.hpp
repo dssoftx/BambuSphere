@@ -41,6 +41,10 @@ class Ui {
   void set_display_rotation(DisplayRotation rotation);
   esp_err_t initialize();
   void set_arc_color_scheme(const ArcColorScheme& colors);
+  // Wall-clock display format for the ETA row and the big page-2 clock.
+  void set_clock_format_24h(bool use_24h);
+  // Optional "Layer: X / Y" line under the printer name on the main page.
+  void set_show_layer_lines(bool show);
   void apply_snapshot(const PrinterSnapshot& snapshot);
   // keep_awake: hard wake-lock (provisioning / camera page / page transition) —
   //             blocks both dimming and screen-off.
@@ -371,6 +375,8 @@ class Ui {
   PrinterSnapshot last_snapshot_{};
   DisplayRotation display_rotation_ = DisplayRotation::k0;
   BatteryDisplayPolicy battery_display_policy_{};
+  bool clock_format_24h_ = true;
+  bool show_layer_lines_ = false;
 };
 
 }  // namespace printsphere

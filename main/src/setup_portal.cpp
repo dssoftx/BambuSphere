@@ -1116,6 +1116,14 @@ esp_err_t SetupPortal::start() {
   ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &display_rotation_uri), kTag,
                       "display rotation handler failed");
 
+  httpd_uri_t display_prefs_uri = {};
+  display_prefs_uri.uri = "/api/display-prefs";
+  display_prefs_uri.method = HTTP_POST;
+  display_prefs_uri.handler = &SetupPortal::handle_display_prefs_post;
+  display_prefs_uri.user_ctx = this;
+  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &display_prefs_uri), kTag,
+                      "display prefs handler failed");
+
   httpd_uri_t battery_display_uri = {};
   battery_display_uri.uri = "/api/battery-display";
   battery_display_uri.method = HTTP_POST;
@@ -1308,6 +1316,8 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   const bool filament_anim = portal->config_store_.load_filament_anim_enabled();
   const bool audio_enabled_cfg = portal->config_store_.load_audio_enabled();
   const int audio_volume_cfg = portal->config_store_.load_audio_volume_percent();
+  const bool clock_format_24h = portal->config_store_.load_clock_format_24h();
+  const bool show_layer_lines_cfg = portal->config_store_.load_show_layer_lines_enabled();
   const PrinterProfile active_profile = portal->config_store_.load_active_printer_profile();
   const PrinterConnection printer = active_profile.to_connection();
   const ArcColorScheme arc_colors = portal->config_store_.load_arc_color_scheme();
@@ -1425,14 +1435,18 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
       setup_ap_active ? "info" : (portal_lock_enabled ? "info" : "warn");
   const std::string ams_display_badge_value = filament_wake || !filament_anim ? "On" : "Off";
   const char* ams_display_badge_class = filament_wake || !filament_anim ? "info" : "idle";
+  const std::string display_prefs_badge_value =
+      std::string(clock_format_24h ? "24-hour" : "12-hour") +
+      (show_layer_lines_cfg ? " · Layer lines on" : "");
   const std::string arc_badge_value = arc_colors_custom ? "Custom" : "Default";
   const char* arc_badge_class = arc_colors_custom ? "info" : "idle";
-  const int device_settings_count = show_connection_steps ? 5 : 4;
+  const int device_settings_count = show_connection_steps ? 6 : 5;
   const std::string device_settings_badge_value =
       std::to_string(device_settings_count) + (device_settings_count == 1 ? " Panel" : " Panels");
   const bool device_settings_section_open = true;
   const bool wifi_section_open = !wifi_configured || !wifi_connected || setup_ap_active;
   const bool rotation_section_open = false;
+  const bool display_prefs_section_open = false;
   const bool energy_section_open = false;
   const bool ams_display_section_open = false;
   const bool connection_mode_section_open = false;
@@ -1713,17 +1727,37 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
     if (cloud.region == CloudRegion::kUS) {
       html += " selected";
     }
-    html += ">US</option>";
+    html += ">North America (US)</option>";
+    html += "<option value=\"sa\"";
+    if (cloud.region == CloudRegion::kSouthAmerica) {
+      html += " selected";
+    }
+    html += ">South America</option>";
     html += "<option value=\"eu\"";
     if (cloud.region == CloudRegion::kEU) {
       html += " selected";
     }
-    html += ">EU</option>";
+    html += ">Europe (EU)</option>";
+    html += "<option value=\"af\"";
+    if (cloud.region == CloudRegion::kAfrica) {
+      html += " selected";
+    }
+    html += ">Africa</option>";
+    html += "<option value=\"as\"";
+    if (cloud.region == CloudRegion::kAsia) {
+      html += " selected";
+    }
+    html += ">Asia</option>";
+    html += "<option value=\"oc\"";
+    if (cloud.region == CloudRegion::kOceania) {
+      html += " selected";
+    }
+    html += ">Oceania / Australia</option>";
     html += "<option value=\"cn\"";
     if (cloud.region == CloudRegion::kCN) {
       html += " selected";
     }
-    html += ">CN</option></select></div>";
+    html += ">China (CN)</option></select></div>";
     html += "<div class=\"hint-box\"><strong>Printer Status:</strong> <span id=\"cloud-detail\">";
     html += json_escape(cloud_snapshot.detail);
     html += "</span><div class=\"micro\" id=\"mqtt-cloud-telemetry\" style=\"margin-top:4px;color:#666;\"></div></div>";
@@ -1820,6 +1854,38 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
     html += "<p class=\"micro\">Current orientation: ";
     html += json_escape(display_rotation_badge_value(display_rotation));
     html += "</p>";
+    end_settings_panel();
+
+    begin_settings_panel(
+        "Display Preferences",
+        "Clock format for the ETA row and the big clock page, plus an optional layer-count line under the printer name.",
+        display_prefs_badge_value, "info", display_prefs_section_open);
+    html += "<div class=\"grid-2\">";
+    html += "<div class=\"field\"><label for=\"clock_format\">Clock Format</label><select id=\"clock_format\">";
+    html += "<option value=\"24\"";
+    if (clock_format_24h) {
+      html += " selected";
+    }
+    html += ">24-hour</option>";
+    html += "<option value=\"12\"";
+    if (!clock_format_24h) {
+      html += " selected";
+    }
+    html += ">12-hour (AM/PM)</option></select></div>";
+    html += "<div class=\"field\"><label for=\"show_layer_lines\">Show Layer Lines</label><select id=\"show_layer_lines\">";
+    html += "<option value=\"false\"";
+    if (!show_layer_lines_cfg) {
+      html += " selected";
+    }
+    html += ">Off</option>";
+    html += "<option value=\"true\"";
+    if (show_layer_lines_cfg) {
+      html += " selected";
+    }
+    html += ">On</option></select></div>";
+    html += "</div>";
+    html += "<div class=\"actions\"><button type=\"button\" class=\"primary hidden\" id=\"display-prefs-apply-button\">Apply + Restart</button>";
+    html += "<div class=\"micro hidden\" id=\"display-prefs-apply-hint\">Applied on the next boot.</div></div>";
     end_settings_panel();
 
     begin_settings_panel(
@@ -2434,6 +2500,10 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   html += "const displayRotationSelect=document.getElementById('display_rotation');";
   html += "const displayRotationApplyButton=document.getElementById('display-rotation-apply-button');";
   html += "const displayRotationApplyHint=document.getElementById('display-rotation-apply-hint');";
+  html += "const clockFormatSelect=document.getElementById('clock_format');";
+  html += "const showLayerLinesSelect=document.getElementById('show_layer_lines');";
+  html += "const displayPrefsApplyButton=document.getElementById('display-prefs-apply-button');";
+  html += "const displayPrefsApplyHint=document.getElementById('display-prefs-apply-hint');";
   html += "const portalLockSelect=document.getElementById('portal_lock_enabled');";
   html += "const portalAccessApplyButton=document.getElementById('portal-access-apply-button');";
   html += "const portalAccessApplyHint=document.getElementById('portal-access-apply-hint');";
@@ -2497,7 +2567,11 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   html += to_string(source_mode);
   html += "\",display_rotation:\"";
   html += to_string(display_rotation);
-  html += "\",portal_lock_enabled:";
+  html += "\",clock_format:\"";
+  html += clock_format_24h ? "24" : "12";
+  html += "\",show_layer_lines:";
+  html += show_layer_lines_cfg ? "true" : "false";
+  html += ",portal_lock_enabled:";
   html += portal_lock_enabled ? "true" : "false";
   html += ",printer_host:\"";
   html += json_escape(printer.host);
@@ -2702,6 +2776,15 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "displayRotationApplyButton.classList.toggle('hidden',!changed);"
           "displayRotationApplyHint.classList.toggle('hidden',!changed);"
           "if(!changed){displayRotationApplyButton.disabled=false;}}";
+  html += "function updateDisplayPrefsControls(){"
+          "if(!clockFormatSelect||!showLayerLinesSelect||!displayPrefsApplyButton||!displayPrefsApplyHint)return;"
+          "const clockNow=valueOf('clock_format')||'24';"
+          "const layerNow=valueOf('show_layer_lines')==='true';"
+          "const changed=clockNow!==(savedConfig.clock_format||'24')"
+              "||layerNow!==(savedConfig.show_layer_lines===true);"
+          "displayPrefsApplyButton.classList.toggle('hidden',!changed);"
+          "displayPrefsApplyHint.classList.toggle('hidden',!changed);"
+          "if(!changed){displayPrefsApplyButton.disabled=false;}}";
   html += "function updatePortalAccessControls(){"
           "if(!portalLockSelect||!portalAccessApplyButton||!portalAccessApplyHint)return;"
           "const selected=valueOf('portal_lock_enabled')==='true';"
@@ -2766,6 +2849,8 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "cloud_region:(document.getElementById('cloud_region')?valueOf('cloud_region'):savedConfig.cloud_region||'eu'),"
           "cloud_password:(document.getElementById('cloud_password')?valueOf('cloud_password'):''),"
           "display_rotation:(document.getElementById('display_rotation')?valueOf('display_rotation'):savedConfig.display_rotation)||'0',"
+          "clock_format:(clockFormatSelect?valueOf('clock_format'):savedConfig.clock_format)||'24',"
+          "show_layer_lines:(showLayerLinesSelect?valueOf('show_layer_lines')==='true':savedConfig.show_layer_lines===true),"
           "portal_lock_enabled:(document.getElementById('portal_lock_enabled')?valueOf('portal_lock_enabled')==='true':savedConfig.portal_lock_enabled!==false),"
           "filament_wake:(document.getElementById('filament_wake')?valueOf('filament_wake')==='true':savedConfig.filament_wake===true),"
           "filament_anim:(document.getElementById('filament_anim')?valueOf('filament_anim')==='true':savedConfig.filament_anim!==false),"
@@ -2806,6 +2891,17 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "if(response.ok){savedConfig.display_rotation=display_rotation;updateDisplayRotationControls();setStatus('Saved. Restarting ESP...','The connection will drop briefly during reboot.',30000);}"
           "else{setStatus(body.error||'Rotation change failed',body.detail||'The new display rotation could not be saved.',8000);displayRotationApplyButton.disabled=false;updateDisplayRotationControls();}}"
           "catch(error){setStatus('Rotation change failed','The request to the ESP could not be completed.',8000);displayRotationApplyButton.disabled=false;updateDisplayRotationControls();}});}";
+  html += "if(clockFormatSelect){clockFormatSelect.addEventListener('change',updateDisplayPrefsControls);}";
+  html += "if(showLayerLinesSelect){showLayerLinesSelect.addEventListener('change',updateDisplayPrefsControls);}";
+  html += "if(displayPrefsApplyButton){displayPrefsApplyButton.addEventListener('click',async()=>{"
+          "const clock_format=valueOf('clock_format')||'24';const show_layer_lines=valueOf('show_layer_lines')==='true';"
+          "if(clock_format===(savedConfig.clock_format||'24')&&show_layer_lines===(savedConfig.show_layer_lines===true)){updateDisplayPrefsControls();return;}"
+          "displayPrefsApplyButton.disabled=true;setStatus('Applying display preferences...','Saving the clock format and layer-line setting and restarting the ESP now.',15000);"
+          "try{const response=await fetch('/api/display-prefs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clock_format,show_layer_lines})});"
+          "const body=await response.json().catch(()=>({}));"
+          "if(response.ok){savedConfig.clock_format=clock_format;savedConfig.show_layer_lines=show_layer_lines;updateDisplayPrefsControls();setStatus('Saved. Restarting ESP...','The connection will drop briefly during reboot.',30000);}"
+          "else{setStatus(body.error||'Display preferences change failed',body.detail||'The new display preferences could not be saved.',8000);displayPrefsApplyButton.disabled=false;updateDisplayPrefsControls();}}"
+          "catch(error){setStatus('Display preferences change failed','The request to the ESP could not be completed.',8000);displayPrefsApplyButton.disabled=false;updateDisplayPrefsControls();}});}";
   html += "if(portalLockSelect){portalLockSelect.addEventListener('change',updatePortalAccessControls);}";
   html += "if(portalAccessApplyButton){portalAccessApplyButton.addEventListener('click',async()=>{const portal_lock_enabled=valueOf('portal_lock_enabled')==='true';"
           "if(portal_lock_enabled===(savedConfig.portal_lock_enabled!==false)){updatePortalAccessControls();return;}"
@@ -3006,7 +3102,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   html += "if(wifiScanButton){wifiScanButton.addEventListener('click',refreshWifiScan);}";
   html += "arcInputIds.forEach((id)=>{const input=document.getElementById(id);if(!input)return;"
           "input.addEventListener('input',queueArcPreview);input.addEventListener('change',commitArcColors);});";
-  html += "updateDisplayRotationControls();updatePortalAccessControls();updateSourceModeControls();updateHealth();healthTimer=setInterval(updateHealth,4000);window.addEventListener('beforeunload',()=>{if(healthTimer){clearInterval(healthTimer);healthTimer=null;}stopCloudFollowup();stopLocalFollowup();});";
+  html += "updateDisplayRotationControls();updateDisplayPrefsControls();updatePortalAccessControls();updateSourceModeControls();updateHealth();healthTimer=setInterval(updateHealth,4000);window.addEventListener('beforeunload',()=>{if(healthTimer){clearInterval(healthTimer);healthTimer=null;}stopCloudFollowup();stopLocalFollowup();});";
 
   // --- Printer selection JS ---
   // Auto-refresh guard: if the page was rendered while the Cloud binding call
@@ -3495,6 +3591,10 @@ esp_err_t SetupPortal::handle_config_get(httpd_req_t* request) {
   body += portal->config_store_.load_audio_enabled() ? "true" : "false";
   body += ",\"audio_volume\":";
   body += std::to_string(portal->config_store_.load_audio_volume_percent());
+  body += ",\"clock_format\":\"";
+  body += portal->config_store_.load_clock_format_24h() ? "24" : "12";
+  body += "\",\"show_layer_lines\":";
+  body += portal->config_store_.load_show_layer_lines_enabled() ? "true" : "false";
   body += ",\"tz_iana\":\"" + json_escape(portal->config_store_.load_timezone_iana()) + "\"";
   body += "}";
 
@@ -3541,6 +3641,12 @@ esp_err_t SetupPortal::handle_config_post(httpd_req_t* request) {
       read_bool_field(root, "filament_wake", portal->config_store_.load_filament_wake_enabled());
   const bool filament_anim =
       read_bool_field(root, "filament_anim", portal->config_store_.load_filament_anim_enabled());
+  const std::string clock_format_field = trim_copy(read_string_field(root, "clock_format"));
+  const bool clock_format_24h = clock_format_field.empty()
+                                     ? portal->config_store_.load_clock_format_24h()
+                                     : clock_format_field != "12";
+  const bool show_layer_lines = read_bool_field(
+      root, "show_layer_lines", portal->config_store_.load_show_layer_lines_enabled());
 
   const PrinterConnection printer = merge_printer_connection({
       .host = trim_copy(read_string_field(root, "printer_host")),
@@ -3623,6 +3729,10 @@ esp_err_t SetupPortal::handle_config_post(httpd_req_t* request) {
                       "save source mode failed");
   ESP_RETURN_ON_ERROR(portal->config_store_.save_display_rotation(display_rotation), kTag,
                       "save display rotation failed");
+  ESP_RETURN_ON_ERROR(portal->config_store_.save_clock_format_24h(clock_format_24h), kTag,
+                      "save clock format failed");
+  ESP_RETURN_ON_ERROR(portal->config_store_.save_show_layer_lines_enabled(show_layer_lines), kTag,
+                      "save show layer lines failed");
   ESP_RETURN_ON_ERROR(portal->config_store_.save_portal_lock_enabled(portal_lock_enabled), kTag,
                       "save portal lock failed");
   ESP_RETURN_ON_ERROR(portal->config_store_.save_filament_wake_enabled(filament_wake), kTag,
@@ -3757,6 +3867,46 @@ esp_err_t SetupPortal::handle_display_rotation_post(httpd_req_t* request) {
   ESP_LOGI(kTag, "Saving display rotation only: %s", to_string(rotation));
   ESP_RETURN_ON_ERROR(portal->config_store_.save_display_rotation(rotation), kTag,
                       "save display rotation failed");
+
+  if (!portal->reboot_requested_) {
+    portal->reboot_requested_ = true;
+    xTaskCreateWithCaps(&SetupPortal::reboot_task, "portal_reboot", 2048, portal, 4, nullptr,
+                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  }
+
+  send_json(request, "{\"status\":\"saved\",\"rebooting\":true}");
+  return ESP_OK;
+}
+
+esp_err_t SetupPortal::handle_display_prefs_post(httpd_req_t* request) {
+  auto* portal = static_cast<SetupPortal*>(request->user_ctx);
+  if (portal == nullptr) {
+    return ESP_FAIL;
+  }
+  if (!portal->is_request_authorized(request)) {
+    return portal->send_locked_response(request);
+  }
+
+  cJSON* root = nullptr;
+  esp_err_t parse_err = receive_json_body(request, &root);
+  if (parse_err != ESP_OK) {
+    return parse_err;
+  }
+
+  const bool stored_24h = portal->config_store_.load_clock_format_24h();
+  const bool stored_show_layer_lines = portal->config_store_.load_show_layer_lines_enabled();
+  const std::string clock_format = trim_copy(read_string_field(root, "clock_format"));
+  const bool use_24h = clock_format.empty() ? stored_24h : clock_format != "12";
+  const bool show_layer_lines =
+      read_bool_field(root, "show_layer_lines", stored_show_layer_lines);
+  cJSON_Delete(root);
+
+  ESP_LOGI(kTag, "Saving display prefs: clock_24h=%d show_layer_lines=%d", use_24h,
+           show_layer_lines);
+  ESP_RETURN_ON_ERROR(portal->config_store_.save_clock_format_24h(use_24h), kTag,
+                      "save clock format failed");
+  ESP_RETURN_ON_ERROR(portal->config_store_.save_show_layer_lines_enabled(show_layer_lines), kTag,
+                      "save show layer lines failed");
 
   if (!portal->reboot_requested_) {
     portal->reboot_requested_ = true;

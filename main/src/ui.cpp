@@ -87,6 +87,9 @@ constexpr int kDevStatsX = -150;
 // up in place (font-size-only change, same family/color) rather than
 // switched to a different font.
 constexpr int32_t kMainNameScale = 332;  // 130% of montserrat_20's native size.
+// Optional "Layer: X / Y" line (Display Settings > Show Layer Lines), sits
+// between the printer name and the chip row when enabled.
+constexpr int kLayerRowY = kMainNameRowY + 50;
 constexpr int kMainChipRowY = 85;
 constexpr int kAuxTempRowY = kMainChipRowY + 28;
 // Icon stays near the ring; value moved further inward (was ±95) and given
@@ -1057,10 +1060,27 @@ std::string remaining_text(const PrinterSnapshot& snapshot) {
   return buffer;
 }
 
-// Wall-clock predicted finish time as "HH:MM". Falls back to the regular
-// remaining-duration text when SNTP has not synced yet (year < 2024) or
-// when no remaining time is reported.
-std::string eta_text(const PrinterSnapshot& snapshot) {
+// Formats a wall-clock time as "HH:MM" (24h) or "H:MM AM/PM" (12h),
+// depending on the user's configured clock format.
+std::string format_wall_clock(const std::tm& local, bool use_24h) {
+  char buffer[12] = {};
+  if (use_24h) {
+    std::snprintf(buffer, sizeof(buffer), "%02d:%02d", local.tm_hour, local.tm_min);
+  } else {
+    int hour12 = local.tm_hour % 12;
+    if (hour12 == 0) {
+      hour12 = 12;
+    }
+    std::snprintf(buffer, sizeof(buffer), "%d:%02d %s", hour12, local.tm_min,
+                  local.tm_hour < 12 ? "AM" : "PM");
+  }
+  return buffer;
+}
+
+// Wall-clock predicted finish time as "HH:MM" (or "H:MM AM/PM"). Falls back
+// to the regular remaining-duration text when SNTP has not synced yet
+// (year < 2024) or when no remaining time is reported.
+std::string eta_text(const PrinterSnapshot& snapshot, bool use_24h) {
   if (snapshot.ui_status == "done" || snapshot.lifecycle == PrintLifecycleState::kFinished) {
     return "Done";
   }
@@ -1077,9 +1097,7 @@ std::string eta_text(const PrinterSnapshot& snapshot) {
   if (localtime_r(&finish, &local) == nullptr) {
     return remaining_text(snapshot);
   }
-  char buffer[8] = {};
-  std::snprintf(buffer, sizeof(buffer), "%02d:%02d", local.tm_hour, local.tm_min);
-  return buffer;
+  return format_wall_clock(local, use_24h);
 }
 
 std::string camera_note_text(const PrinterSnapshot& snapshot) {
@@ -1217,6 +1235,14 @@ void Ui::set_display_rotation(DisplayRotation rotation) {
     return;
   }
   display_rotation_ = rotation;
+}
+
+void Ui::set_clock_format_24h(bool use_24h) {
+  clock_format_24h_ = use_24h;
+}
+
+void Ui::set_show_layer_lines(bool show) {
+  show_layer_lines_ = show;
 }
 
 esp_err_t Ui::initialize() {
@@ -1972,7 +1998,8 @@ void Ui::apply_snapshot_locked(const PrinterSnapshot& snapshot, bool force_ring_
     set_label_text_if_changed(filament_value_label_, filament);
   }
 
-  const std::string remaining = show_eta_ ? eta_text(snapshot) : remaining_text(snapshot);
+  const std::string remaining =
+      show_eta_ ? eta_text(snapshot, clock_format_24h_) : remaining_text(snapshot);
   set_label_text_if_changed(remaining_label_, remaining);
   // Hide the clock-icon prefix in ETA mode — leaves more room for "HH:MM"
   // and avoids the redundant clock-glyph + clock-time stutter.
@@ -2076,9 +2103,7 @@ void Ui::apply_snapshot_locked(const PrinterSnapshot& snapshot, bool force_ring_
     if (now >= 1700000000) {
       std::tm local{};
       if (localtime_r(&now, &local) != nullptr) {
-        char buf[8] = {};
-        std::snprintf(buf, sizeof(buf), "%02d:%02d", local.tm_hour, local.tm_min);
-        clock_text = buf;
+        clock_text = format_wall_clock(local, clock_format_24h_);
       }
     }
     set_label_text_if_changed(page2_time_label_, clock_text);
@@ -2926,7 +2951,7 @@ esp_err_t Ui::build_dashboard() {
   lv_obj_set_flex_flow(layer_row_, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(layer_row_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                         LV_FLEX_ALIGN_CENTER);
-  lv_obj_align(layer_row_, LV_ALIGN_CENTER, 0, 70);
+  lv_obj_align(layer_row_, LV_ALIGN_CENTER, 0, kLayerRowY);
   lv_obj_clear_flag(layer_row_, LV_OBJ_FLAG_SCROLLABLE);
 
   layer_label_ = lv_label_create(layer_row_);
@@ -3348,10 +3373,11 @@ void Ui::apply_page_visibility() {
   set_hidden(dev_stats_left_label_, !on_page1);
   set_hidden(dev_stats_right_label_, !on_page1);
 #endif  // PRINTSPHERE_DEV_DIAGNOSTICS
-  // Layer/filament-weight row has no slot in the reworked main-page layout
-  // (mockup #1: %, status, printer name, nozzle/bed chips, remaining chip).
-  // Kept built (harmless) but permanently hidden rather than removed.
-  set_hidden(layer_row_, true);
+  // Optional layer-count line under the printer name (Display Settings >
+  // Show Layer Lines) — off by default, matching the reworked main-page
+  // layout (mockup #1: %, status, printer name, nozzle/bed chips, remaining
+  // chip) that originally dropped this row.
+  set_hidden(layer_row_, !on_page1 || !show_layer_lines_);
   set_hidden(battery_icon_label_, !show_battery_overlay);
   set_hidden(battery_pct_label_, !show_battery_overlay);
   set_hidden(nozzle_prefix_label_, !on_page1);

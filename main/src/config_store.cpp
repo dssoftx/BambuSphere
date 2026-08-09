@@ -104,6 +104,14 @@ const char* to_string(CloudRegion region) {
       return "us";
     case CloudRegion::kCN:
       return "cn";
+    case CloudRegion::kSouthAmerica:
+      return "sa";
+    case CloudRegion::kAfrica:
+      return "af";
+    case CloudRegion::kAsia:
+      return "as";
+    case CloudRegion::kOceania:
+      return "oc";
     case CloudRegion::kEU:
     default:
       return "eu";
@@ -116,6 +124,18 @@ CloudRegion parse_cloud_region(const std::string& value) {
   }
   if (value == "cn") {
     return CloudRegion::kCN;
+  }
+  if (value == "sa") {
+    return CloudRegion::kSouthAmerica;
+  }
+  if (value == "af") {
+    return CloudRegion::kAfrica;
+  }
+  if (value == "as") {
+    return CloudRegion::kAsia;
+  }
+  if (value == "oc") {
+    return CloudRegion::kOceania;
   }
   return CloudRegion::kEU;
 }
@@ -261,6 +281,14 @@ bool ConfigStore::load_audio_enabled() const {
   return parse_bool_or_default(load_string("audio_en"), true);
 }
 
+bool ConfigStore::load_clock_format_24h() const {
+  return parse_bool_or_default(load_string("clock_24h"), true);
+}
+
+bool ConfigStore::load_show_layer_lines_enabled() const {
+  return parse_bool_or_default(load_string("layer_lines"), false);
+}
+
 int ConfigStore::load_audio_volume_percent() const {
   const std::string s = load_string("audio_vol");
   if (s.empty()) {
@@ -383,6 +411,14 @@ esp_err_t ConfigStore::save_filament_anim_enabled(bool enabled) const {
 
 esp_err_t ConfigStore::save_audio_enabled(bool enabled) const {
   return save_string("audio_en", enabled ? "1" : "0");
+}
+
+esp_err_t ConfigStore::save_clock_format_24h(bool use_24h) const {
+  return save_string("clock_24h", use_24h ? "1" : "0");
+}
+
+esp_err_t ConfigStore::save_show_layer_lines_enabled(bool enabled) const {
+  return save_string("layer_lines", enabled ? "1" : "0");
 }
 
 esp_err_t ConfigStore::save_audio_volume_percent(int volume) const {

@@ -63,6 +63,7 @@ class SetupPortal {
   static esp_err_t handle_arc_update(httpd_req_t* request, bool persist);
   static esp_err_t handle_source_mode_post(httpd_req_t* request);
   static esp_err_t handle_display_rotation_post(httpd_req_t* request);
+  static esp_err_t handle_display_prefs_post(httpd_req_t* request);
   static esp_err_t handle_battery_display_post(httpd_req_t* request);
   static esp_err_t handle_portal_access_post(httpd_req_t* request);
   static esp_err_t handle_ams_display_post(httpd_req_t* request);

@@ -19,6 +19,10 @@ enum class CloudRegion : uint8_t {
   kUS,
   kEU,
   kCN,
+  kSouthAmerica,
+  kAfrica,
+  kAsia,
+  kOceania,
 };
 
 enum class DisplayRotation : uint8_t {
@@ -135,6 +139,12 @@ class ConfigStore {
   // IANA timezone name (e.g. "Europe/Berlin"). Empty when never configured;
   // callers should fall back to a sensible default (handled in time_sync).
   std::string load_timezone_iana() const;
+  // Wall-clock display format. Defaults to 24-hour (existing behavior).
+  bool load_clock_format_24h() const;
+  // Optional "Layer: X / Y" line under the printer name on the main page.
+  // Defaults to off (existing behavior, unchanged from before this setting
+  // existed).
+  bool load_show_layer_lines_enabled() const;
 
   esp_err_t save_wifi_credentials(const WifiCredentials& credentials) const;
   esp_err_t save_cloud_credentials(const BambuCloudCredentials& credentials) const;
@@ -149,6 +159,8 @@ class ConfigStore {
   esp_err_t save_audio_volume_percent(int volume) const;
   esp_err_t save_display_brightness_percent(int percent) const;
   esp_err_t save_timezone_iana(const std::string& iana_name) const;
+  esp_err_t save_clock_format_24h(bool use_24h) const;
+  esp_err_t save_show_layer_lines_enabled(bool enabled) const;
   std::vector<PrinterProfile> load_printer_profiles() const;
   esp_err_t save_printer_profile(const PrinterProfile& profile) const;
   esp_err_t delete_printer_profile(uint8_t index) const;
