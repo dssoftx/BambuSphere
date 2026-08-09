@@ -1060,8 +1060,9 @@ std::string remaining_text(const PrinterSnapshot& snapshot) {
   return buffer;
 }
 
-// Formats a wall-clock time as "HH:MM" (24h) or "H:MM AM/PM" (12h),
-// depending on the user's configured clock format.
+// Formats a wall-clock time as "HH:MM" (24h) or "H:MM" (12h, no AM/PM —
+// the suffix overflowed the clock widget at 2-digit hours), depending on
+// the user's configured clock format.
 std::string format_wall_clock(const std::tm& local, bool use_24h) {
   char buffer[12] = {};
   if (use_24h) {
@@ -1071,13 +1072,12 @@ std::string format_wall_clock(const std::tm& local, bool use_24h) {
     if (hour12 == 0) {
       hour12 = 12;
     }
-    std::snprintf(buffer, sizeof(buffer), "%d:%02d %s", hour12, local.tm_min,
-                  local.tm_hour < 12 ? "AM" : "PM");
+    std::snprintf(buffer, sizeof(buffer), "%d:%02d", hour12, local.tm_min);
   }
   return buffer;
 }
 
-// Wall-clock predicted finish time as "HH:MM" (or "H:MM AM/PM"). Falls back
+// Wall-clock predicted finish time as "HH:MM" (or 12h "H:MM"). Falls back
 // to the regular remaining-duration text when SNTP has not synced yet
 // (year < 2024) or when no remaining time is reported.
 std::string eta_text(const PrinterSnapshot& snapshot, bool use_24h) {

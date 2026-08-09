@@ -1871,7 +1871,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
     if (!clock_format_24h) {
       html += " selected";
     }
-    html += ">12-hour (AM/PM)</option></select></div>";
+    html += ">12-hour</option></select></div>";
     html += "<div class=\"field\"><label for=\"show_layer_lines\">Show Layer Lines</label><select id=\"show_layer_lines\">";
     html += "<option value=\"false\"";
     if (!show_layer_lines_cfg) {
