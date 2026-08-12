@@ -358,6 +358,7 @@ void Application::run() {
   const BambuCloudCredentials cloud_credentials = config_store_.load_cloud_credentials();
   source_mode_ = config_store_.load_source_mode();
   const PrinterConnection printer_connection = config_store_.load_active_printer_profile().to_connection();
+  active_printer_serial_ = printer_connection.serial;
   const auto boot_profiles = config_store_.load_printer_profiles();
   // Subscribes this one cloud MQTT session to every cloud-bound printer, not
   // just the active one, so switching later is instant (see set_active_serial()).
@@ -448,6 +449,12 @@ void Application::run() {
       // portal.
       audio_state_primed_ = false;
       last_active_printer_index_ = active_printer_index;
+      // Also refreshes on portal-driven switches. BambuCloudClient applies
+      // its own active-serial switch asynchronously on its background task
+      // (see set_active_serial()), so this cached value can briefly lead it
+      // by a loop iteration or two — that gap is exactly what the
+      // resolved_serial guard in build_merged_snapshot below is for.
+      active_printer_serial_ = config_store_.load_active_printer_profile().serial;
     }
     PrinterClient& active_printer_client = printer_client_pool_.client_for(active_printer_index);
     local_printer_enabled_ = active_printer_client.is_configured();
@@ -607,9 +614,20 @@ void Application::run() {
     }
     auto build_merged_snapshot = [&](const PrinterSnapshot& current_local_snapshot,
                                      const BambuCloudSnapshot& current_cloud_snapshot) {
+      // BambuCloudClient::set_active_serial() applies the switch on its own
+      // background task; until it does, snapshot() keeps returning data for
+      // the previously active printer. Treat it as "not yet configured" for
+      // this merge rather than momentarily showing the other printer's
+      // progress/status right after a swipe or web-portal switch.
+      BambuCloudSnapshot cloud_snapshot_for_merge = current_cloud_snapshot;
+      if (!active_printer_serial_.empty() && !cloud_snapshot_for_merge.resolved_serial.empty() &&
+          cloud_snapshot_for_merge.resolved_serial != active_printer_serial_) {
+        cloud_snapshot_for_merge.configured = false;
+      }
       PrinterSnapshot merged =
-          merge_status_sources(current_local_snapshot, local_printer_enabled_, current_cloud_snapshot,
-                               source_mode_, now_ms, wifi_connected, wifi_ip);
+          merge_status_sources(current_local_snapshot, local_printer_enabled_,
+                               cloud_snapshot_for_merge, source_mode_, now_ms, wifi_connected,
+                               wifi_ip);
       merged.setup_ap_active = current_local_snapshot.setup_ap_active;
       merged.setup_ap_ssid = current_local_snapshot.setup_ap_ssid;
       merged.setup_ap_password = current_local_snapshot.setup_ap_password;
@@ -619,7 +637,7 @@ void Application::run() {
       merged.preview_page_available = source_mode_ != SourceMode::kLocalOnly;
       merged.camera_page_available =
           route_allows_local_jpeg_camera(source_mode_, current_local_snapshot,
-                                         current_cloud_snapshot);
+                                         cloud_snapshot_for_merge);
       return merged;
     };
     auto apply_chamber_light_override = [&](PrinterSnapshot* target_snapshot) {

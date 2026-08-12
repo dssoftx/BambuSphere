@@ -307,6 +307,11 @@ class Ui {
   // see apply_page_visibility()) is currently applied, so it's only
   // restyled on an actual page-settle transition, not every call.
   int progress_label_style_ = 0;
+  // Tracks which of the two battery-overlay Y positions is applied — lower
+  // on the main page so it clears the enlarged progress-% label (see
+  // apply_page_visibility()), the original higher spot everywhere else the
+  // overlay shows (camera page).
+  int battery_overlay_style_ = 0;
   bool camera_page_available_ = true;
   bool camera_image_visible_ = false;
   bool camera_text_image_mode_ = false;

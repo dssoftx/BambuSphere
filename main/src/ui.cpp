@@ -69,6 +69,16 @@ constexpr int kMainProgressY = -155;
 // nudged down so it clears the ring — it sat too close to the ring's top
 // arc at kProgressLabelDefaultY once those pages got their own content.
 constexpr int kRaisedProgressLabelY = -160;
+// Battery overlay (icon + %) shares one screen position with the camera
+// page's print-status text (see apply_page_visibility()). That shared spot
+// works fine on the camera page, where the progress-% label stays small and
+// high (kProgressLabelDefaultY), but on the main page the label grows to
+// kMainProgressScale at kMainProgressY and its enlarged glyphs reach down
+// far enough to collide with a battery row at the same height. Give the
+// main page its own lower position, between the big percentage and the
+// status pill (kMainStatusY).
+constexpr int kBatteryDefaultY = -140;
+constexpr int kMainBatteryY = -105;
 // Self-settings page (kPageIdxSelfSettings) brightness control layout.
 constexpr int kBrightnessBarWidth = 64;
 constexpr int kBrightnessBarHeight = 220;
@@ -2873,7 +2883,7 @@ esp_err_t Ui::build_dashboard() {
   set_label_text_if_changed(battery_icon_label_, kMdiBattery100);
   lv_obj_set_style_text_font(battery_icon_label_, mdi30, 0);
   lv_obj_set_style_text_color(battery_icon_label_, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_align(battery_icon_label_, LV_ALIGN_CENTER, -20, -140);
+  lv_obj_align(battery_icon_label_, LV_ALIGN_CENTER, -20, kBatteryDefaultY);
   apply_display_rotation_visual_offset(battery_icon_label_, display_rotation_);
   lv_obj_move_foreground(battery_icon_label_);
 
@@ -2881,7 +2891,7 @@ esp_err_t Ui::build_dashboard() {
   set_label_text_if_changed(battery_pct_label_, "--%");
   lv_obj_set_style_text_font(battery_pct_label_, dosis20, 0);
   lv_obj_set_style_text_color(battery_pct_label_, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_align(battery_pct_label_, LV_ALIGN_CENTER, 20, -140);
+  lv_obj_align(battery_pct_label_, LV_ALIGN_CENTER, 20, kBatteryDefaultY);
   apply_display_rotation_visual_offset(battery_pct_label_, display_rotation_);
   lv_obj_move_foreground(battery_pct_label_);
 
@@ -3356,6 +3366,18 @@ void Ui::apply_page_visibility() {
   const bool show_battery_overlay =
       (last_snapshot_.battery_present || last_snapshot_.charging) &&
       (settled_page1 || (!scrolling_ && active_page_ == kPageIdxCamera));
+  // On the main page the progress-% label is enlarged (style 1 above) and
+  // reaches down far enough to collide with the battery row at its default
+  // Y, so drop the battery row lower there; everywhere else it shows
+  // (camera page) keeps the original position. Only restyle on an actual
+  // settle transition, matching the progress-label restyle above.
+  const int desired_battery_style = settled_page1 ? 1 : 0;
+  if (desired_battery_style != battery_overlay_style_) {
+    battery_overlay_style_ = desired_battery_style;
+    const int battery_y = desired_battery_style == 1 ? kMainBatteryY : kBatteryDefaultY;
+    lv_obj_align(battery_icon_label_, LV_ALIGN_CENTER, -20, battery_y);
+    lv_obj_align(battery_pct_label_, LV_ALIGN_CENTER, 20, battery_y);
+  }
   const bool portal_hint_has_priority = portal_pin_active_ || portal_session_active_;
   const bool show_portal_hint =
       settled_page1 && !portal_hint_text_.empty() &&

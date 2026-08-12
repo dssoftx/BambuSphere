@@ -69,6 +69,12 @@ class Application {
   // Sentinel (out of the valid 0-15 profile range) so the first loop
   // iteration always "changes" and harmlessly re-primes audio state.
   uint8_t last_active_printer_index_ = 0xFF;
+  // Serial of the currently active printer, refreshed whenever
+  // last_active_printer_index_ changes. Used to detect when
+  // BambuCloudClient::snapshot() still reflects the previously active
+  // printer (its serial switch is applied asynchronously on its own task)
+  // so the merge can ignore it for the brief window until it catches up.
+  std::string active_printer_serial_;
 };
 
 }  // namespace printsphere
