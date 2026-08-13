@@ -48,6 +48,7 @@ class SetupPortal {
 
   esp_err_t start();
   void request_unlock_pin();
+  void cancel_unlock_pin();
   PortalAccessSnapshot access_snapshot(bool request_authorized = false);
 
  private:

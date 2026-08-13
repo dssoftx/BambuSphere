@@ -69,6 +69,21 @@ class Application {
   // Sentinel (out of the valid 0-15 profile range) so the first loop
   // iteration always "changes" and harmlessly re-primes audio state.
   uint8_t last_active_printer_index_ = 0xFF;
+  // Serial of the currently active printer, refreshed whenever
+  // last_active_printer_index_ changes. Paired with
+  // cloud_switch_grace_until_tick_ below to briefly hide a stale cloud
+  // snapshot right after switching (BambuCloudClient applies its own
+  // active-serial switch asynchronously on its background task).
+  std::string active_printer_serial_;
+  // Deadline set on every printer switch. While active, build_merged_snapshot
+  // treats the cloud snapshot as unconfigured IF its resolved_serial is known
+  // and doesn't match active_printer_serial_ yet - masking the brief window
+  // where cloud_client_.snapshot() still reflects the previous printer.
+  // Bounded (not indefinite) so a printer whose resolved_serial never lines
+  // up with the locally-saved serial (e.g. the cloud switch is still
+  // in-flight past this deadline) falls back to normal, un-gated merging
+  // instead of leaving cloud data hidden forever.
+  TickType_t cloud_switch_grace_until_tick_ = 0;
 };
 
 }  // namespace printsphere

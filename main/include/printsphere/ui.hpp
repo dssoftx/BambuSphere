@@ -87,6 +87,7 @@ class Ui {
     return print_command_request_.load() != static_cast<uint8_t>(PrintCommand::kNone);
   }
   bool consume_portal_unlock_request();
+  bool consume_portal_pin_dismiss_request();
 
   struct PrinterCardInfo {
     uint8_t index = 0;
@@ -307,6 +308,11 @@ class Ui {
   // see apply_page_visibility()) is currently applied, so it's only
   // restyled on an actual page-settle transition, not every call.
   int progress_label_style_ = 0;
+  // Tracks which of the two battery-overlay Y positions is applied — lower
+  // on the main page so it clears the enlarged progress-% label (see
+  // apply_page_visibility()), the original higher spot everywhere else the
+  // overlay shows (camera page).
+  int battery_overlay_style_ = 0;
   bool camera_page_available_ = true;
   bool camera_image_visible_ = false;
   bool camera_text_image_mode_ = false;
@@ -371,6 +377,12 @@ class Ui {
   std::atomic<bool> chamber_light_toggle_requested_{false};
   std::atomic<uint8_t> print_command_request_{static_cast<uint8_t>(PrintCommand::kNone)};
   std::atomic<bool> portal_unlock_requested_{false};
+  std::atomic<bool> portal_pin_dismiss_requested_{false};
+  // Set on LONG_PRESSED (which opens the PIN popup) so the immediately
+  // following RELEASED isn't itself counted as the first of the two fast
+  // taps that dismiss it.
+  bool portal_pin_long_press_release_ = false;
+  uint64_t portal_pin_last_tap_ms_ = 0;
   PrinterSnapshot deferred_snapshot_{};
   PrinterSnapshot last_snapshot_{};
   DisplayRotation display_rotation_ = DisplayRotation::k0;

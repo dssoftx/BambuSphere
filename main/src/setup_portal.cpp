@@ -798,6 +798,12 @@ void SetupPortal::request_unlock_pin() {
   unlock_pin_expiry_ms_ = current_ms + kPortalPinLifetimeMs;
 }
 
+void SetupPortal::cancel_unlock_pin() {
+  std::lock_guard<std::mutex> lock(access_mutex_);
+  unlock_pin_.clear();
+  unlock_pin_expiry_ms_ = 0;
+}
+
 PortalAccessSnapshot SetupPortal::access_snapshot(bool request_authorized) {
   const bool lock_enabled = is_lock_enabled();
   const bool lock_required = is_lock_required();

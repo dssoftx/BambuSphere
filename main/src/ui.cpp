@@ -69,6 +69,12 @@ constexpr int kMainProgressY = -155;
 // nudged down so it clears the ring — it sat too close to the ring's top
 // arc at kProgressLabelDefaultY once those pages got their own content.
 constexpr int kRaisedProgressLabelY = -160;
+// Battery icon+% overlay: default (camera page) position, and a lower main-
+// page-only position that clears the enlarged progress-% label above
+// (kMainProgressY/kMainProgressScale) — its 156% glyphs extend down to
+// roughly Y=-124, past the default battery row at kBatteryDefaultY.
+constexpr int kBatteryDefaultY = -140;
+constexpr int kMainBatteryY = -105;
 // Self-settings page (kPageIdxSelfSettings) brightness control layout.
 constexpr int kBrightnessBarWidth = 64;
 constexpr int kBrightnessBarHeight = 220;
@@ -105,6 +111,8 @@ constexpr int kMainAuxTempX = 90;
 constexpr int kSwipeThresholdPx = 24;
 constexpr int kGestureAxisLockMarginPx = 16;
 constexpr int kBrightnessHorizontalTolerancePx = 18;
+// Two taps this close together (in ms) dismiss the Web Config PIN popup.
+constexpr uint64_t kDoubleTapDismissWindowMs = 400;
 constexpr int kRotatedVisualOffsetX = 0;
 constexpr int kRotatedVisualOffsetY = 0;
 constexpr int kManualMinBrightnessPercent = 4;
@@ -1374,6 +1382,10 @@ PrintCommand Ui::consume_print_command_request() {
 
 bool Ui::consume_portal_unlock_request() {
   return portal_unlock_requested_.exchange(false);
+}
+
+bool Ui::consume_portal_pin_dismiss_request() {
+  return portal_pin_dismiss_requested_.exchange(false);
 }
 
 void Ui::set_portal_access_state(bool lock_enabled, bool request_authorized,
@@ -2873,7 +2885,7 @@ esp_err_t Ui::build_dashboard() {
   set_label_text_if_changed(battery_icon_label_, kMdiBattery100);
   lv_obj_set_style_text_font(battery_icon_label_, mdi30, 0);
   lv_obj_set_style_text_color(battery_icon_label_, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_align(battery_icon_label_, LV_ALIGN_CENTER, -20, -140);
+  lv_obj_align(battery_icon_label_, LV_ALIGN_CENTER, -20, kBatteryDefaultY);
   apply_display_rotation_visual_offset(battery_icon_label_, display_rotation_);
   lv_obj_move_foreground(battery_icon_label_);
 
@@ -2881,7 +2893,7 @@ esp_err_t Ui::build_dashboard() {
   set_label_text_if_changed(battery_pct_label_, "--%");
   lv_obj_set_style_text_font(battery_pct_label_, dosis20, 0);
   lv_obj_set_style_text_color(battery_pct_label_, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_align(battery_pct_label_, LV_ALIGN_CENTER, 20, -140);
+  lv_obj_align(battery_pct_label_, LV_ALIGN_CENTER, 20, kBatteryDefaultY);
   apply_display_rotation_visual_offset(battery_pct_label_, display_rotation_);
   lv_obj_move_foreground(battery_pct_label_);
 
@@ -3356,6 +3368,17 @@ void Ui::apply_page_visibility() {
   const bool show_battery_overlay =
       (last_snapshot_.battery_present || last_snapshot_.charging) &&
       (settled_page1 || (!scrolling_ && active_page_ == kPageIdxCamera));
+  // Lower on the main page only, clearing the enlarged progress-% label
+  // above (see kMainBatteryY); the original spot everywhere else the
+  // overlay shows (camera page). Only restyle on an actual settle
+  // transition, matching the progress_label_style_ pattern above.
+  const int desired_battery_style = settled_page1 ? 1 : 0;
+  if (desired_battery_style != battery_overlay_style_) {
+    battery_overlay_style_ = desired_battery_style;
+    const int battery_y = desired_battery_style == 1 ? kMainBatteryY : kBatteryDefaultY;
+    lv_obj_align(battery_icon_label_, LV_ALIGN_CENTER, -20, battery_y);
+    lv_obj_align(battery_pct_label_, LV_ALIGN_CENTER, 20, battery_y);
+  }
   const bool portal_hint_has_priority = portal_pin_active_ || portal_session_active_;
   const bool show_portal_hint =
       settled_page1 && !portal_hint_text_.empty() &&
@@ -3740,6 +3763,7 @@ void Ui::handle_screen_event(lv_event_t* event) {
     gesture_active_ = true;
     swipe_switched_ = false;
     overlay_visible_ = false;
+    portal_pin_long_press_release_ = false;
     gesture_start_x_ = point.x;
     gesture_start_y_ = point.y;
     gesture_start_brightness_ = user_brightness_percent_;
@@ -3827,6 +3851,7 @@ void Ui::handle_screen_event(lv_event_t* event) {
     note_activity(false);
     if (!overlay_visible_ && !scrolling_ && !swipe_switched_) {
       portal_unlock_requested_.store(true);
+      portal_pin_long_press_release_ = true;
     }
     return;
   }
@@ -3855,6 +3880,44 @@ void Ui::handle_screen_event(lv_event_t* event) {
     }
     if (swipe_locked) {
       return;
+    }
+
+    // Fallback for the vertical printer-switch gesture: normally it fires
+    // live during LV_EVENT_PRESSING as soon as one sample crosses the
+    // threshold (see above). During PrintLifecycleState::kPreparing the app
+    // task's snapshot-driven LVGL updates run much more often (status text
+    // changing almost continuously), which can starve the touch driver of a
+    // PRESSING sample big enough to cross the threshold before release, so
+    // the live path never fires even though the finger genuinely dragged far
+    // enough. Re-check the total press-to-release displacement here so the
+    // switch still happens in that case. overlay_visible_ is already false
+    // at this point (the branch above returns early otherwise), so this
+    // can't double-fire a switch that already happened live, and it never
+    // touches the settings-page brightness drag.
+    if (active_page_ != kPageIdxPrinterSelect && active_page_ != kPageIdxSelfSettings &&
+        abs_dy >= kSwipeThresholdPx && abs_dx <= kBrightnessHorizontalTolerancePx &&
+        abs_dy >= (abs_dx + kGestureAxisLockMarginPx)) {
+      cycle_active_printer(dy > 0 ? 1 : -1);
+      return;
+    }
+
+    // Two fast taps dismiss the Web Config PIN popup early instead of
+    // waiting for it to expire on its own. The release that follows the
+    // long-press which opened it doesn't count as the first tap (see
+    // portal_pin_long_press_release_).
+    if (portal_pin_active_ && abs_dx < 12 && abs_dy < 12) {
+      const bool counts_as_tap = !portal_pin_long_press_release_;
+      portal_pin_long_press_release_ = false;
+      if (counts_as_tap) {
+        const uint64_t tap_ms = static_cast<uint64_t>(esp_timer_get_time() / 1000ULL);
+        if (portal_pin_last_tap_ms_ != 0 && tap_ms - portal_pin_last_tap_ms_ <= kDoubleTapDismissWindowMs) {
+          portal_pin_dismiss_requested_.store(true);
+          portal_pin_last_tap_ms_ = 0;
+        } else {
+          portal_pin_last_tap_ms_ = tap_ms;
+        }
+        return;
+      }
     }
 
     // Horizontal page swiping is handled by the LVGL pager (flex-row +

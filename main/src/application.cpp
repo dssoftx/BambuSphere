@@ -359,6 +359,7 @@ void Application::run() {
   source_mode_ = config_store_.load_source_mode();
   const PrinterConnection printer_connection = config_store_.load_active_printer_profile().to_connection();
   const auto boot_profiles = config_store_.load_printer_profiles();
+  active_printer_serial_ = printer_connection.serial;
   // Subscribes this one cloud MQTT session to every cloud-bound printer, not
   // just the active one, so switching later is instant (see set_active_serial()).
   cloud_client_.configure(cloud_credentials, cloud_bound_serials(boot_profiles),
@@ -379,6 +380,9 @@ void Application::run() {
     const uint64_t now_ms = static_cast<uint64_t>(esp_timer_get_time() / 1000ULL);
     if (ui_.consume_portal_unlock_request()) {
       setup_portal_.request_unlock_pin();
+    }
+    if (ui_.consume_portal_pin_dismiss_request()) {
+      setup_portal_.cancel_unlock_pin();
     }
     const int switch_idx = ui_.consume_printer_switch_request();
     if (switch_idx >= 0 &&
@@ -448,6 +452,12 @@ void Application::run() {
       // portal.
       audio_state_primed_ = false;
       last_active_printer_index_ = active_printer_index;
+      // Also refreshes on portal-driven switches. See cloud_switch_grace_until_tick_
+      // for why: BambuCloudClient applies its own active-serial switch
+      // asynchronously on its background task, so cloud_client_.snapshot()
+      // can briefly keep reflecting the previous printer here.
+      active_printer_serial_ = config_store_.load_active_printer_profile().serial;
+      cloud_switch_grace_until_tick_ = now_tick + pdMS_TO_TICKS(3000);
     }
     PrinterClient& active_printer_client = printer_client_pool_.client_for(active_printer_index);
     local_printer_enabled_ = active_printer_client.is_configured();
@@ -607,8 +617,24 @@ void Application::run() {
     }
     auto build_merged_snapshot = [&](const PrinterSnapshot& current_local_snapshot,
                                      const BambuCloudSnapshot& current_cloud_snapshot) {
+      // Right after switching printers, cloud_client_.snapshot() can still
+      // briefly reflect the previous printer (its own active-serial switch is
+      // applied asynchronously - see cloud_switch_grace_until_tick_). Hide it
+      // for that bounded window if we can tell it's stale (resolved_serial
+      // known and not the one we just switched to); past the deadline, fall
+      // back to trusting current_cloud_snapshot.configured as-is regardless,
+      // so a printer whose resolved_serial never lines up can't leave cloud
+      // data hidden forever.
+      const bool cloud_switch_pending =
+          tick_deadline_active(cloud_switch_grace_until_tick_, now_tick) &&
+          !current_cloud_snapshot.resolved_serial.empty() &&
+          current_cloud_snapshot.resolved_serial != active_printer_serial_;
+      BambuCloudSnapshot cloud_snapshot_for_merge = current_cloud_snapshot;
+      if (cloud_switch_pending) {
+        cloud_snapshot_for_merge.configured = false;
+      }
       PrinterSnapshot merged =
-          merge_status_sources(current_local_snapshot, local_printer_enabled_, current_cloud_snapshot,
+          merge_status_sources(current_local_snapshot, local_printer_enabled_, cloud_snapshot_for_merge,
                                source_mode_, now_ms, wifi_connected, wifi_ip);
       merged.setup_ap_active = current_local_snapshot.setup_ap_active;
       merged.setup_ap_ssid = current_local_snapshot.setup_ap_ssid;
@@ -619,7 +645,7 @@ void Application::run() {
       merged.preview_page_available = source_mode_ != SourceMode::kLocalOnly;
       merged.camera_page_available =
           route_allows_local_jpeg_camera(source_mode_, current_local_snapshot,
-                                         current_cloud_snapshot);
+                                         cloud_snapshot_for_merge);
       return merged;
     };
     auto apply_chamber_light_override = [&](PrinterSnapshot* target_snapshot) {
