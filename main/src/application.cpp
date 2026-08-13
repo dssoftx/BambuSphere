@@ -489,7 +489,15 @@ void Application::run() {
         source_mode_ != SourceMode::kCloudOnly &&
         hybrid_local_status_supported(local_snapshot, cloud_snapshot);
     const PrinterModel routing_model = preferred_model_for_routing(local_snapshot, cloud_snapshot);
-    const bool routing_model_has_jpeg_camera = printer_model_has_jpeg_camera(routing_model);
+    // kUnknown (model not positively identified yet) is treated as "assume it
+    // has the jpeg camera" here, matching route_allows_local_jpeg_camera below
+    // and P1sCameraClient's own model check. Without this, hybrid_local_camera_demand
+    // below stays permanently closed - and the camera page permanently shows
+    // "Camera off" - for any printer whose model the app never manages to
+    // positively identify (e.g. if its cloud/local report payloads don't
+    // carry a product name this build's detection recognizes).
+    const bool routing_model_has_jpeg_camera =
+        routing_model == PrinterModel::kUnknown || printer_model_has_jpeg_camera(routing_model);
     const bool camera_model_has_jpeg =
         route_allows_local_jpeg_camera(source_mode_, local_snapshot, cloud_snapshot);
     const bool hybrid_camera_cooldown_active =
