@@ -29,4 +29,9 @@ std::vector<std::string_view> supported_iana_zones();
 // acquired so the system clock can sync against pool.ntp.org.
 void start_sntp_if_needed();
 
+// True once the system clock holds a plausible wall-clock time (SNTP has
+// synced at least once). TLS certificate validity checks need this, so
+// cloud HTTPS/MQTT waits for it instead of failing with a 1970 clock.
+bool clock_ready();
+
 }  // namespace printsphere::time_sync

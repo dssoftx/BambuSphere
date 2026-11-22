@@ -11,6 +11,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
+#include <strings.h>
 #include <memory>
 #include <mutex>
 #include <string_view>
@@ -21,6 +23,7 @@
 #include "printsphere/bambu_status.hpp"
 #include "printsphere/error_lookup.hpp"
 #include "printsphere/status_resolver.hpp"
+#include "printsphere/time_sync.hpp"
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
@@ -73,31 +76,55 @@ constexpr size_t kMaxJsonResponseBytes = 96U * 1024U;
 constexpr int kCloudPrintErrorTaskCanceled = 0x0300400C;
 constexpr int kCloudPrintErrorPrintingCancelled = 0x0500400E;
 
-struct TfaCookieContext {
+// Response headers captured by perform_json_request(): the Set-Cookie
+// access token (2FA login) and CSRF token, plus Retry-After for rate limits.
+// Ported from upstream PrintSphere.
+struct HttpHeaderContext {
   std::string token;
+  std::string csrf;
+  std::string content_type;
+  uint32_t retry_after = 0;
 };
 
-esp_err_t tfa_event_handler(esp_http_client_event_t* evt) {
-  if (evt == nullptr || evt->user_data == nullptr) {
+esp_err_t cloud_header_handler(esp_http_client_event_t* event) {
+  if (event == nullptr || event->event_id != HTTP_EVENT_ON_HEADER || event->user_data == nullptr ||
+      event->header_key == nullptr || event->header_value == nullptr) {
     return ESP_OK;
   }
-  if (evt->event_id == HTTP_EVENT_ON_HEADER && evt->header_key != nullptr &&
-      evt->header_value != nullptr) {
-    if (strcasecmp(evt->header_key, "Set-Cookie") == 0) {
-      const std::string cookie(evt->header_value);
-      constexpr char kPrefix[] = "token=";
-      const auto pos = cookie.find(kPrefix);
-      if (pos != std::string::npos) {
-        const auto value_start = pos + sizeof(kPrefix) - 1;
-        const auto value_end = cookie.find(';', value_start);
-        auto* ctx = static_cast<TfaCookieContext*>(evt->user_data);
-        ctx->token = cookie.substr(value_start,
-                                   value_end != std::string::npos ? value_end - value_start
-                                                                  : std::string::npos);
-      }
+  auto& context = *static_cast<HttpHeaderContext*>(event->user_data);
+  const std::string value(event->header_value);
+  if (strcasecmp(event->header_key, "Content-Type") == 0) {
+    context.content_type = value;
+  }
+  if (strcasecmp(event->header_key, "Retry-After") == 0) {
+    context.retry_after =
+        cloud_http::retry_after_seconds(value, static_cast<int64_t>(std::time(nullptr)));
+  }
+  if (strcasecmp(event->header_key, "Set-Cookie") == 0 && value.size() <= 8192) {
+    const auto separator = value.find(';');
+    const std::string pair = value.substr(0, separator);
+    if (pair.rfind("token=", 0) == 0 && pair.size() > 6) {
+      context.token = pair.substr(6);
+    }
+    if (pair.rfind("bbl_csrf_token=", 0) == 0) {
+      context.csrf = pair.substr(15);
     }
   }
   return ESP_OK;
+}
+
+// Identify honestly as PrintSphere instead of impersonating OrcaSlicer /
+// bambu_network_agent (what this fork sent before). These are the headers
+// upstream PrintSphere switched to, whose cloud login works on devices
+// where the spoofed slicer identity no longer does.
+void set_cloud_headers(esp_http_client_handle_t client) {
+  esp_http_client_set_header(client, "User-Agent", "PrintSphere/" PRINTSPHERE_RELEASE_VERSION);
+  esp_http_client_set_header(client, "X-BBL-Client-Name", "PrintSphere");
+  esp_http_client_set_header(client, "X-BBL-Client-Type", "monitor");
+  esp_http_client_set_header(client, "X-BBL-Client-Version", PRINTSPHERE_RELEASE_VERSION);
+  esp_http_client_set_header(client, "Accept", "application/json");
+  esp_http_client_set_header(client, "Accept-Encoding", "identity");
+  esp_http_client_set_header(client, "Content-Type", "application/json");
 }
 
 const char* wifi_second_channel_name(wifi_second_chan_t second) {
@@ -1964,6 +1991,10 @@ void BambuCloudClient::apply_configuration(BambuCloudCredentials credentials,
   cached_preview_url_.clear();
   cached_preview_blob_.reset();
   clear_auth_state();
+  // New/reloaded configuration counts as a fresh user action: allow one
+  // password login. A pending Cloudflare/rate-limit deadline (http_budget_)
+  // intentionally survives so repeated Connect clicks can't hammer Bambu.
+  password_attempt_allowed_ = true;
   mqtt_username_.clear();
   mqtt_auth_recovery_requested_ = false;
   mqtt_auth_connect_return_code_ = static_cast<int>(MQTT_CONNECTION_ACCEPTED);
@@ -3557,6 +3588,7 @@ void BambuCloudClient::task_loop() {
       access_token_.clear();
       token_expiry_us_ = 0;
       mqtt_username_.clear();
+      password_attempt_allowed_ = true;
 
       if (credentials_.can_password_login()) {
         const std::string detail =
@@ -3603,6 +3635,15 @@ void BambuCloudClient::task_loop() {
       continue;
     }
 
+    // TLS certificate checks (cloud HTTPS and MQTT) need real time.
+    if (!time_sync::clock_ready()) {
+      stop_mqtt_client();
+      apply_cloud_session_state(true, false, false, false, "Waiting for network time (NTP)",
+                                false, false);
+      ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
+      continue;
+    }
+
     const int64_t now_us = esp_timer_get_time();
     const int64_t auth_retry_not_before_us = mqtt_auth_retry_not_before_us_.load();
     if (auth_retry_not_before_us != 0 && now_us < auth_retry_not_before_us) {
@@ -3622,13 +3663,21 @@ void BambuCloudClient::task_loop() {
     if (access_token_.empty() || now_us >= token_expiry_us_) {
       stop_mqtt_client();
       mqtt_username_.clear();
+      if (!access_token_.empty()) {
+        // An expired token (not a rejected password) earns a fresh login.
+        access_token_.clear();
+        password_attempt_allowed_ = true;
+      }
       if (waiting_for_user_code()) {
         apply_cloud_session_state(true, false, true, auth_mode() == AuthMode::kTfaCode,
                                   auth_mode() == AuthMode::kTfaCode
                                       ? "Bambu Cloud requires 2FA code"
                                       : "Bambu Cloud verification code required",
                                   false, true);
-      } else {
+      } else if (password_attempt_allowed_.load() && auth_budget_.due(now_us)) {
+        // Only announce a login that will actually be attempted, so the
+        // previous failure detail (rejected password, Cloudflare block,
+        // rate limit) stays visible in Web Config otherwise.
         apply_cloud_session_state(true, false, false, false,
                                   "Logging in to Bambu Cloud", false, true);
       }
@@ -3811,6 +3860,9 @@ void BambuCloudClient::task_loop() {
 }
 
 bool BambuCloudClient::login() {
+  if (!auth_budget_.due(esp_timer_get_time())) {
+    return false;
+  }
   const AuthMode mode = auth_mode();
   if (mode == AuthMode::kEmailCode) {
     const std::string code = pending_verification_code();
@@ -3828,6 +3880,12 @@ bool BambuCloudClient::login() {
     return authenticate_with_tfa_code(code);
   }
 
+  // One automatic password attempt per user action (see
+  // password_attempt_allowed_). A rejected password stays rejected until
+  // the user reconnects instead of being re-sent every 15 s.
+  if (!password_attempt_allowed_.exchange(false)) {
+    return false;
+  }
   return authenticate_with_password();
 }
 
@@ -3854,14 +3912,14 @@ bool BambuCloudClient::authenticate_with_password() {
   if (!perform_json_request(cloud_api_url(credentials_.region, kLoginPath), "POST", request_body,
                             {}, &status_code, &response_body)) {
     apply_cloud_session_state(true, false, false, false,
-                              "Bambu Cloud login request failed", false, true);
+                              http_failure_detail("Bambu Cloud login"), false, true);
     return false;
   }
 
   cJSON* root = cJSON_Parse(response_body.c_str());
   if (root == nullptr) {
     apply_cloud_session_state(true, false, false, false,
-                              "Bambu Cloud login returned invalid JSON", false, true);
+                              http_failure_detail("Bambu Cloud login response"), false, true);
     return false;
   }
 
@@ -3891,7 +3949,8 @@ bool BambuCloudClient::authenticate_with_password() {
     return false;
   }
 
-  if (login_type == "tfa") {
+  if (login_type == "tfa" ||
+      !json_string(root, "tfaKey", json_string(data, "tfaKey", {})).empty()) {
     set_auth_mode(AuthMode::kTfaCode, json_string(root, "tfaKey", json_string(data, "tfaKey", {})));
     apply_cloud_session_state(true, false, true, true,
                               "Bambu Cloud requires 2FA code", false, true);
@@ -3902,7 +3961,7 @@ bool BambuCloudClient::authenticate_with_password() {
   if (status_code < 200 || status_code >= 300 || token.empty()) {
     apply_cloud_session_state(true, false, false, false,
                               !api_error.empty() ? "Bambu Cloud login failed: " + api_error
-                                                 : "Bambu Cloud login rejected",
+                                                 : http_failure_detail("Bambu Cloud login"),
                               false, true);
     cJSON_Delete(root);
     return false;
@@ -3926,6 +3985,8 @@ bool BambuCloudClient::authenticate_with_password() {
   }
   clear_auth_state();
 
+  auth_budget_.reset();
+  password_attempt_allowed_ = true;
   apply_cloud_session_state(true, false, false, false,
                             "Bambu Cloud session ready", true, true);
   ESP_LOGI(kTag, "Bambu Cloud login successful");
@@ -3993,6 +4054,8 @@ bool BambuCloudClient::authenticate_with_email_code(const std::string& code) {
       }
     }
     clear_auth_state();
+    auth_budget_.reset();
+    password_attempt_allowed_ = true;
 
     apply_cloud_session_state(true, false, false, false,
                               "Bambu Cloud session ready", true, true);
@@ -4030,6 +4093,12 @@ bool BambuCloudClient::authenticate_with_tfa_code(const std::string& code) {
     tfa_key = tfa_key_;
   }
 
+  if (tfa_key.empty()) {
+    cJSON_Delete(body);
+    apply_cloud_session_state(true, false, true, true,
+                              "2FA challenge missing; reconnect your account", false, true);
+    return false;
+  }
   cJSON_AddStringToObject(body, "tfaKey", tfa_key.c_str());
   cJSON_AddStringToObject(body, "tfaCode", code.c_str());
 
@@ -4042,95 +4111,40 @@ bool BambuCloudClient::authenticate_with_tfa_code(const std::string& code) {
   const std::string request_body(payload);
   cJSON_free(payload);
 
-  // The TFA endpoint returns the access token in a Set-Cookie header
-  // (not in the JSON body), so we use an event handler to capture it.
-  TfaCookieContext cookie_ctx;
-
-  const std::string url = cloud_site_url(credentials_.region, kTfaLoginPath);
-
-  esp_http_client_config_t config = {};
-  config.url = url.c_str();
-  config.timeout_ms = 10000;
-  config.crt_bundle_attach = esp_crt_bundle_attach;
-  config.method = HTTP_METHOD_POST;
-  config.keep_alive_enable = false;
-  config.buffer_size = 2048;
-  config.buffer_size_tx = 1024;
-  config.event_handler = tfa_event_handler;
-  config.user_data = &cookie_ctx;
-
-  esp_http_client_handle_t client = esp_http_client_init(&config);
-  if (client == nullptr) {
+  // Bambu's web sign-in requires a CSRF token: fetch one from /api/csrf
+  // (returned as the bbl_csrf_token cookie), then send it back as both a
+  // cookie and the x-bbl-csrf-token header. The access token comes back in
+  // a Set-Cookie header, not the JSON body. Same flow as upstream
+  // PrintSphere.
+  int status_code = 0;
+  std::string response_body;
+  std::string csrf;
+  const bool csrf_ok = perform_json_request(cloud_site_url(credentials_.region, "/api/csrf"),
+                                            "GET", {}, {}, &status_code, &response_body, {},
+                                            nullptr, &csrf);
+  if (!csrf_ok || status_code != 204 || csrf.empty()) {
+    ESP_LOGW(kTag, "Bambu Cloud CSRF fetch failed: ok=%d status=%d csrf=%d", csrf_ok ? 1 : 0,
+             status_code, csrf.empty() ? 0 : 1);
     apply_cloud_session_state(true, false, true, true,
-                              "Bambu Cloud 2FA login failed (HTTP init)", false, true);
+                              http_failure_detail("Bambu Cloud 2FA session") +
+                                  "; reconnect or use an emailed code if available",
+                              false, true);
     return false;
   }
 
-  esp_http_client_set_header(client, "User-Agent", "bambu_network_agent/01.09.05.01");
-  esp_http_client_set_header(client, "X-BBL-Client-Name", "OrcaSlicer");
-  esp_http_client_set_header(client, "X-BBL-Client-Type", "slicer");
-  esp_http_client_set_header(client, "X-BBL-Client-Version", "01.09.05.51");
-  esp_http_client_set_header(client, "X-BBL-Language", "en-US");
-  esp_http_client_set_header(client, "X-BBL-OS-Type", "linux");
-  esp_http_client_set_header(client, "X-BBL-OS-Version", "6.2.0");
-  esp_http_client_set_header(client, "X-BBL-Agent-Version", "01.09.05.01");
-  esp_http_client_set_header(client, "X-BBL-Executable-info", "{}");
-  esp_http_client_set_header(client, "X-BBL-Agent-OS-Type", "linux");
-  esp_http_client_set_header(client, "Accept", "application/json");
-  esp_http_client_set_header(client, "Content-Type", "application/json");
-
-  const esp_err_t open_err = esp_http_client_open(client, static_cast<int>(request_body.size()));
-  if (open_err != ESP_OK) {
-    ESP_LOGW(kTag, "HTTP open failed for TFA: %s", esp_err_to_name(open_err));
-    esp_http_client_cleanup(client);
-    apply_cloud_session_state(true, false, true, true,
-                              "Bambu Cloud 2FA connection failed", false, true);
-    return false;
-  }
-
-  const int written =
-      esp_http_client_write(client, request_body.c_str(), static_cast<int>(request_body.size()));
-  if (written < 0) {
-    ESP_LOGW(kTag, "HTTP write failed for TFA");
-    esp_http_client_close(client);
-    esp_http_client_cleanup(client);
-    apply_cloud_session_state(true, false, true, true,
-                              "Bambu Cloud 2FA request failed", false, true);
-    return false;
-  }
-
-  const int fetch_result = esp_http_client_fetch_headers(client);
-  if (fetch_result < 0) {
-    ESP_LOGW(kTag, "HTTP fetch headers failed for TFA");
-    esp_http_client_close(client);
-    esp_http_client_cleanup(client);
-    apply_cloud_session_state(true, false, true, true,
-                              "Bambu Cloud 2FA response failed", false, true);
-    return false;
-  }
-
-  const int status_code = esp_http_client_get_status_code(client);
-
-  // Drain the response body (we don't need it, but must read it to completion)
-  char drain_buf[256];
-  while (true) {
-    const int n = esp_http_client_read(client, drain_buf, sizeof(drain_buf));
-    if (n <= 0) {
-      break;
-    }
-  }
-
-  esp_http_client_close(client);
-  esp_http_client_cleanup(client);
-
-  if (status_code < 200 || status_code >= 300) {
+  std::string token;
+  const bool ok = perform_json_request(cloud_site_url(credentials_.region, kTfaLoginPath), "POST",
+                                       request_body, {}, &status_code, &response_body, csrf,
+                                       &token);
+  if (!ok || status_code < 200 || status_code >= 300) {
     ESP_LOGW(kTag, "Bambu Cloud 2FA rejected: status=%d", status_code);
     apply_cloud_session_state(true, false, true, true,
-                              "Bambu Cloud 2FA code rejected", false, true);
+                              status_code == 400 ? "Bambu Cloud 2FA code rejected; enter a fresh code"
+                                                 : http_failure_detail("Bambu Cloud 2FA"),
+                              false, true);
     return false;
   }
-
-  if (cookie_ctx.token.empty()) {
+  if (token.empty()) {
     ESP_LOGW(kTag, "Bambu Cloud 2FA succeeded but no token cookie received");
     apply_cloud_session_state(true, false, true, true,
                               "Bambu Cloud 2FA succeeded but no token received", false, true);
@@ -4138,7 +4152,7 @@ bool BambuCloudClient::authenticate_with_tfa_code(const std::string& code) {
   }
 
   ESP_LOGI(kTag, "Bambu Cloud 2FA login successful (token from cookie)");
-  access_token_ = cookie_ctx.token;
+  access_token_ = token;
   token_expiry_us_ =
       esp_timer_get_time() + static_cast<int64_t>(3600 - 60) * 1000000LL;
   mqtt_username_.clear();
@@ -4157,6 +4171,8 @@ bool BambuCloudClient::authenticate_with_tfa_code(const std::string& code) {
   }
   clear_auth_state();
 
+  auth_budget_.reset();
+  password_attempt_allowed_ = true;
   apply_cloud_session_state(true, false, false, false,
                             "Bambu Cloud session ready", true, true);
   return true;
@@ -4869,115 +4885,181 @@ std::shared_ptr<std::vector<uint8_t>> BambuCloudClient::download_preview_image(c
 bool BambuCloudClient::perform_json_request(const std::string& url, const char* method,
                                             const std::string& request_body,
                                             const std::string& bearer_token, int* status_code,
-                                            std::string* response_body) {
+                                            std::string* response_body, const std::string& csrf,
+                                            std::string* response_token,
+                                            std::string* response_csrf) {
   if (status_code == nullptr || response_body == nullptr) {
     return false;
   }
-
-  response_body->clear();
   *status_code = 0;
+  response_body->clear();
+  if (response_token != nullptr) response_token->clear();
+  if (response_csrf != nullptr) response_csrf->clear();
 
+  // A previous Cloudflare block / rate limit / outage defers every request
+  // until its retry deadline.
+  if (!http_budget_.due(esp_timer_get_time())) {
+    return false;
+  }
+  last_http_status_ = 0;
+  last_http_failure_ = cloud_http::HttpFailure::kTransport;
+  last_transport_error_ = ESP_ERR_INVALID_STATE;
+  // Certificate validation needs real wall-clock time.
+  if (!time_sync::clock_ready()) {
+    return false;
+  }
+
+  HttpHeaderContext headers;
   esp_http_client_config_t config = {};
   config.url = url.c_str();
   config.timeout_ms = 10000;
   config.crt_bundle_attach = esp_crt_bundle_attach;
   config.method = (std::strcmp(method, "POST") == 0) ? HTTP_METHOD_POST : HTTP_METHOD_GET;
   config.keep_alive_enable = false;
+  config.disable_auto_redirect = true;
   config.buffer_size = 2048;
-  config.buffer_size_tx = 1024;
+  config.buffer_size_tx =
+      static_cast<int>(std::max<size_t>(2048, bearer_token.size() + 2 * csrf.size() + 768));
+  config.event_handler = cloud_header_handler;
+  config.user_data = &headers;
 
   esp_http_client_handle_t client = esp_http_client_init(&config);
   if (client == nullptr) {
+    last_transport_error_ = ESP_ERR_NO_MEM;
     return false;
   }
-
-  esp_http_client_set_header(client, "User-Agent", "bambu_network_agent/01.09.05.01");
-  esp_http_client_set_header(client, "X-BBL-Client-Name", "OrcaSlicer");
-  esp_http_client_set_header(client, "X-BBL-Client-Type", "slicer");
-  esp_http_client_set_header(client, "X-BBL-Client-Version", "01.09.05.51");
-  esp_http_client_set_header(client, "X-BBL-Language", "en-US");
-  esp_http_client_set_header(client, "X-BBL-OS-Type", "linux");
-  esp_http_client_set_header(client, "X-BBL-OS-Version", "6.2.0");
-  esp_http_client_set_header(client, "X-BBL-Agent-Version", "01.09.05.01");
-  esp_http_client_set_header(client, "X-BBL-Executable-info", "{}");
-  esp_http_client_set_header(client, "X-BBL-Agent-OS-Type", "linux");
-  esp_http_client_set_header(client, "Accept", "application/json");
-  if (!request_body.empty()) {
-    esp_http_client_set_header(client, "Content-Type", "application/json");
-  }
+  set_cloud_headers(client);
   if (!bearer_token.empty()) {
     const std::string authorization = "Bearer " + bearer_token;
     esp_http_client_set_header(client, "Authorization", authorization.c_str());
   }
-
-  const esp_err_t open_err = esp_http_client_open(client, static_cast<int>(request_body.size()));
-  if (open_err != ESP_OK) {
-    ESP_LOGW(kTag, "HTTP open failed for %s: %s", url.c_str(), esp_err_to_name(open_err));
-    esp_http_client_cleanup(client);
-    return false;
+  if (!csrf.empty()) {
+    const std::string cookie = "bbl_csrf_token=" + csrf;
+    esp_http_client_set_header(client, "Cookie", cookie.c_str());
+    esp_http_client_set_header(client, "x-bbl-csrf-token", csrf.c_str());
   }
 
-  if (!request_body.empty()) {
-    const int written =
-        esp_http_client_write(client, request_body.c_str(), static_cast<int>(request_body.size()));
-    if (written < 0) {
-      ESP_LOGW(kTag, "HTTP write failed for %s", url.c_str());
-      esp_http_client_close(client);
-      esp_http_client_cleanup(client);
-      return false;
-    }
-  }
-
-  const int fetch_result = esp_http_client_fetch_headers(client);
-  if (fetch_result < 0) {
-    ESP_LOGW(kTag, "HTTP fetch headers failed for %s", url.c_str());
-    esp_http_client_close(client);
-    esp_http_client_cleanup(client);
-    return false;
-  }
-
-  *status_code = esp_http_client_get_status_code(client);
-  const int64_t content_length = esp_http_client_get_content_length(client);
-  if (content_length > static_cast<int64_t>(kMaxJsonResponseBytes)) {
-    ESP_LOGW(kTag, "HTTP JSON response too large for %s: %lld bytes",
-             url.c_str(), content_length);
-    esp_http_client_close(client);
-    esp_http_client_cleanup(client);
-    return false;
-  }
-  constexpr int64_t kMaxReadDurationUs = 20 * 1000 * 1000;  // 20s total read deadline
-  const int64_t read_start_us = esp_timer_get_time();
-  char buffer[1024];
-  while (true) {
-    if (esp_timer_get_time() - read_start_us > kMaxReadDurationUs) {
-      ESP_LOGW(kTag, "HTTP read deadline exceeded for %s (%d bytes received)",
-               url.c_str(), static_cast<int>(response_body->size()));
-      esp_http_client_close(client);
-      esp_http_client_cleanup(client);
-      return false;
-    }
-    const int read = esp_http_client_read(client, buffer, sizeof(buffer));
-    if (read < 0) {
-      ESP_LOGW(kTag, "HTTP read failed for %s (errno=%d)", url.c_str(), errno);
-      esp_http_client_close(client);
-      esp_http_client_cleanup(client);
-      return false;
-    }
-    if (read == 0) {
+  bool complete = false;
+  do {
+    last_transport_error_ = esp_http_client_open(client, static_cast<int>(request_body.size()));
+    if (last_transport_error_ != ESP_OK) {
       break;
     }
-    if (response_body->size() + static_cast<size_t>(read) > kMaxJsonResponseBytes) {
-      ESP_LOGW(kTag, "HTTP JSON response exceeded cap for %s", url.c_str());
-      esp_http_client_close(client);
-      esp_http_client_cleanup(client);
-      return false;
+    size_t sent = 0;
+    const int64_t write_deadline_us = esp_timer_get_time() + 10000000LL;
+    while (sent < request_body.size() && esp_timer_get_time() < write_deadline_us) {
+      const int written = esp_http_client_write(client, request_body.data() + sent,
+                                                static_cast<int>(request_body.size() - sent));
+      if (written <= 0) {
+        break;
+      }
+      sent += static_cast<size_t>(written);
     }
-    response_body->append(buffer, read);
-  }
+    if (sent != request_body.size()) {
+      last_transport_error_ = ESP_FAIL;
+      break;
+    }
+    if (esp_http_client_fetch_headers(client) < 0) {
+      last_transport_error_ = ESP_FAIL;
+      break;
+    }
+    *status_code = last_http_status_ = esp_http_client_get_status_code(client);
+    const int64_t content_length = esp_http_client_get_content_length(client);
+    if (content_length > static_cast<int64_t>(kMaxJsonResponseBytes)) {
+      ESP_LOGW(kTag, "HTTP JSON response too large for %s: %lld bytes", url.c_str(),
+               content_length);
+      break;
+    }
+    const int64_t read_deadline_us = esp_timer_get_time() + 20000000LL;
+    char buffer[1024];
+    while (esp_timer_get_time() < read_deadline_us) {
+      const int read = esp_http_client_read(client, buffer, sizeof(buffer));
+      if (read < 0) {
+        break;
+      }
+      if (read == 0) {
+        complete = esp_http_client_is_complete_data_received(client);
+        break;
+      }
+      if (response_body->size() + static_cast<size_t>(read) > kMaxJsonResponseBytes) {
+        ESP_LOGW(kTag, "HTTP JSON response exceeded cap for %s", url.c_str());
+        break;
+      }
+      response_body->append(buffer, static_cast<size_t>(read));
+    }
+  } while (false);
 
+  if (!complete) {
+    int tls_error = 0;
+    int verify_flags = 0;
+    esp_http_client_get_and_clear_last_tls_error(client, &tls_error, &verify_flags);
+    ESP_LOGW(kTag, "Cloud transport failed for %s: esp=%s tls=0x%x verify=0x%x HTTP=%d",
+             url.c_str(), esp_err_to_name(last_transport_error_), tls_error, verify_flags,
+             last_http_status_);
+  }
   esp_http_client_close(client);
   esp_http_client_cleanup(client);
-  return true;
+
+  last_http_failure_ = complete ? cloud_http::classify_http(*status_code, *response_body)
+                                : cloud_http::HttpFailure::kTransport;
+  if (complete && response_token != nullptr) *response_token = std::move(headers.token);
+  if (complete && response_csrf != nullptr) *response_csrf = std::move(headers.csrf);
+
+  const int64_t now_us = esp_timer_get_time();
+  if (last_http_failure_ == cloud_http::HttpFailure::kRateLimited ||
+      last_http_failure_ == cloud_http::HttpFailure::kWaf) {
+    // Blocked or throttled: honour Retry-After, at least 5 minutes.
+    const uint32_t delay_s = std::max<uint32_t>(headers.retry_after, 300);
+    http_budget_.defer(now_us, delay_s);
+    auth_budget_.defer(now_us, delay_s);
+  } else if (last_http_failure_ == cloud_http::HttpFailure::kTransport ||
+             last_http_failure_ == cloud_http::HttpFailure::kServer) {
+    // Temporary: short jittered pause, and a later password retry is fine
+    // because the password itself was never judged.
+    http_budget_.defer(now_us, 30 + esp_random() % 16);
+    auth_budget_.defer(now_us, 60 + esp_random() % 16);
+    password_attempt_allowed_ = true;
+  }
+  if (last_http_failure_ != cloud_http::HttpFailure::kNone) {
+    ESP_LOGW(kTag, "Cloud HTTP=%d class=%s type=%s url=%s", last_http_status_,
+             cloud_http::failure_name(last_http_failure_), headers.content_type.c_str(),
+             url.c_str());
+  }
+  return complete;
+}
+
+std::string BambuCloudClient::http_failure_detail(const char* context) const {
+  std::string result = std::string(context) + ": ";
+  switch (last_http_failure_) {
+    case cloud_http::HttpFailure::kWaf:
+      result += "blocked by Cloudflare; wait and reconnect";
+      break;
+    case cloud_http::HttpFailure::kCsrf:
+      result += "CSRF session missing or expired";
+      break;
+    case cloud_http::HttpFailure::kRateLimited:
+      result += "rate limited; retrying later";
+      break;
+    case cloud_http::HttpFailure::kUnauthorized:
+      result += "authentication rejected; reconnect account";
+      break;
+    case cloud_http::HttpFailure::kForbidden:
+      result += "access forbidden";
+      break;
+    case cloud_http::HttpFailure::kServer:
+      result += "Bambu service unavailable";
+      break;
+    case cloud_http::HttpFailure::kTransport:
+      result += std::string("connection failed (") + esp_err_to_name(last_transport_error_) + ")";
+      break;
+    default:
+      result += "unexpected server response";
+      break;
+  }
+  if (last_http_status_ != 0) {
+    result += " (HTTP " + std::to_string(last_http_status_) + ")";
+  }
+  return result;
 }
 
 void BambuCloudClient::set_snapshot(BambuCloudSnapshot snapshot) {

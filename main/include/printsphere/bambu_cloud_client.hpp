@@ -13,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mqtt_client.h"
+#include "printsphere/cloud_http_policy.hpp"
 #include "printsphere/config_store.hpp"
 #include "printsphere/mqtt_telemetry.hpp"
 #include "printsphere/printer_state.hpp"
@@ -256,9 +257,18 @@ class BambuCloudClient {
   bool request_email_verification_code();
   bool request_sms_verification_code();
   bool request_verification_code();
+  // Every cloud REST call goes through here: honest PrintSphere client
+  // headers, optional CSRF cookie/header, captures the Set-Cookie token /
+  // CSRF value, classifies failures (Cloudflare, CSRF, rate limit, auth,
+  // server) and defers further HTTP/auth attempts accordingly.
   bool perform_json_request(const std::string& url, const char* method,
                             const std::string& request_body, const std::string& bearer_token,
-                            int* status_code, std::string* response_body);
+                            int* status_code, std::string* response_body,
+                            const std::string& csrf = {}, std::string* response_token = nullptr,
+                            std::string* response_csrf = nullptr);
+  // "<context>: <reason> (HTTP n)" for the most recent request, shown in
+  // Web Config so a block/rate limit is visible instead of a generic error.
+  std::string http_failure_detail(const char* context) const;
   void set_snapshot(BambuCloudSnapshot snapshot);
   AuthMode auth_mode() const;
   bool waiting_for_user_code() const;
@@ -384,6 +394,18 @@ class BambuCloudClient {
   std::string pending_verification_code_{};
   std::string cached_preview_url_{};
   std::shared_ptr<std::vector<uint8_t>> cached_preview_blob_{};
+  // HTTP failure tracking / pacing (see perform_json_request()). Only
+  // touched from the cloud task.
+  int last_http_status_ = 0;
+  cloud_http::HttpFailure last_http_failure_ = cloud_http::HttpFailure::kNone;
+  esp_err_t last_transport_error_ = ESP_OK;
+  cloud_http::RetryBudget http_budget_{};
+  cloud_http::RetryBudget auth_budget_{};
+  // One automatic password login per user action (connect / reload /
+  // config change / transient failure / rejected token). A rejected
+  // password is not retried in a loop, which would get the account
+  // rate-limited or blocked by Bambu's Cloudflare front.
+  std::atomic<bool> password_attempt_allowed_{true};
 };
 
 }  // namespace printsphere

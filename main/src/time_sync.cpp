@@ -162,4 +162,9 @@ void start_sntp_if_needed() {
   ESP_LOGI(kTag, "SNTP started (pool.ntp.org)");
 }
 
+bool clock_ready() {
+  // 2023-11-14; any synced clock is well past this.
+  return std::time(nullptr) >= 1700000000;
+}
+
 }  // namespace printsphere::time_sync
