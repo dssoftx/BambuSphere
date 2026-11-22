@@ -1,3 +1,7 @@
+// Compiled out in the no-cloud test build (PRINTSPHERE_CLOUD=off); see
+// bambu_cloud_client_disabled.cpp.
+#ifndef PRINTSPHERE_NO_CLOUD
+
 #include "printsphere/bambu_cloud_client.hpp"
 
 #include <algorithm>
@@ -5535,3 +5539,5 @@ const cJSON* BambuCloudClient::child_array(const cJSON* object, const char* key)
 }
 
 }  // namespace printsphere
+
+#endif  // PRINTSPHERE_NO_CLOUD

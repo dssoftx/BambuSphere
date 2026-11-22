@@ -54,6 +54,7 @@ idf_component_register(
         "src/audio_notifier.cpp"
         "src/bambu_status.cpp"
         "src/bambu_cloud_client.cpp"
+        "src/bambu_cloud_client_disabled.cpp"
         "src/config_store.cpp"
         "src/error_lookup.cpp"
         "include/font/dosis_20.c"
@@ -93,6 +94,7 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     ${PRINTSPHERE_HW_COMPILE_DEFINE}
     ${PRINTSPHERE_PRINTER_TARGET_COMPILE_DEFINE}
     ${PRINTSPHERE_DEV_DIAGNOSTICS_COMPILE_DEFINE}
+    ${PRINTSPHERE_CLOUD_COMPILE_DEFINE}
 )
 
 if("${PRINTSPHERE_HW_COMPILE_DEFINE}" STREQUAL "PRINTSPHERE_HW_VARIANT_AMOLED_1_75=1")

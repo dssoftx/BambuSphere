@@ -72,6 +72,25 @@ elseif(NOT PRINTSPHERE_DEV_DIAGNOSTICS STREQUAL "off")
         "Use 'off' or 'on'.")
 endif()
 
+# Cloud axis: 'off' builds a no-cloud test firmware. BambuCloudClient is
+# replaced by a stub (main/src/bambu_cloud_client_disabled.cpp) that never
+# logs in or opens any cloud connection, Connection Mode is forced to Local
+# Only and the cloud sections are hidden in Web Config. Built and published
+# by CI to release/nocloud/ on every push to main; not a release channel.
+set(PRINTSPHERE_CLOUD "on" CACHE STRING
+    "PrintSphere Bambu Cloud support: on or off (no-cloud test build)")
+set_property(CACHE PRINTSPHERE_CLOUD PROPERTY STRINGS "on" "off")
+
+set(PRINTSPHERE_CLOUD_COMPILE_DEFINE "")
+if(PRINTSPHERE_CLOUD STREQUAL "off")
+    set(PRINTSPHERE_CLOUD_COMPILE_DEFINE "PRINTSPHERE_NO_CLOUD=1")
+    set(PRINTSPHERE_RELEASE_VERSION_SUFFIX "${PRINTSPHERE_RELEASE_VERSION_SUFFIX}-nocloud")
+    set(PRINTSPHERE_RELEASE_ROOT "${PRINTSPHERE_RELEASE_ROOT}/nocloud")
+elseif(NOT PRINTSPHERE_CLOUD STREQUAL "on")
+    message(FATAL_ERROR
+        "Unsupported PRINTSPHERE_CLOUD='${PRINTSPHERE_CLOUD}'. Use 'on' or 'off'.")
+endif()
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(printsphere_idf)
 

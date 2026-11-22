@@ -107,6 +107,28 @@ build per commit):
 python tools/package_initial_flash.py --build-dir build-amoled_1_75-dev --release-root release --dev
 ```
 
+## No-cloud test build
+
+`PRINTSPHERE_CLOUD` (`on` by default, `off` to disable) builds a testing
+firmware with every Bambu Cloud feature removed: `BambuCloudClient` is
+replaced by a stub (`main/src/bambu_cloud_client_disabled.cpp`) that never
+logs in or opens a cloud connection, Connection Mode is forced to Local Only
+(`ConfigStore::load_source_mode()`), and the cloud sections are hidden in Web
+Config. Normal builds are unaffected.
+
+Like the dev build, CI rebuilds it on every push to `main` and publishes it to
+`release/nocloud/` (web flasher entry "Test: no cloud"). To build it manually:
+
+```powershell
+idf.py -B build-amoled_1_75-nocloud `
+  -DSDKCONFIG=build-amoled_1_75-nocloud/sdkconfig `
+  -DPRINTSPHERE_HW_VARIANT=amoled_1_75 `
+  -DPRINTSPHERE_CLOUD=off `
+  reconfigure build
+python tools/package_initial_flash.py --build-dir build-amoled_1_75-nocloud --release-root release/nocloud `
+  --output release/nocloud/printsphere_full.bin --ota-output release/nocloud/printsphere_ota.bin
+```
+
 ## Build the AMOLED 1.75 variant
 
 Mainline:

@@ -274,6 +274,11 @@ std::string ConfigStore::load_cloud_access_token() const {
 }
 
 SourceMode ConfigStore::load_source_mode() const {
+#ifdef PRINTSPHERE_NO_CLOUD
+  // No-cloud test build: there is no cloud client, so always run Local Only
+  // regardless of what an earlier firmware saved.
+  return SourceMode::kLocalOnly;
+#endif
   std::string value = load_string("source_mode");
   if (value.empty()) {
     value = load_string("state_source");

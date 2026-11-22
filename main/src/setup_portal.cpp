@@ -1670,7 +1670,9 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   html += "<div class=\"badge-grid\">";
   add_badge(&html, "wifi-badge", "Wi-Fi", wifi_badge_value, wifi_badge_class);
   if (show_connection_steps) {
+#ifndef PRINTSPHERE_NO_CLOUD
     add_badge(&html, "cloud-badge", "Cloud", cloud_badge_value, cloud_badge_class);
+#endif
     add_badge(&html, "source-badge", "Source", source_badge_value, "info");
     add_badge(&html, "local-badge", "Local Path", local_badge_value, local_badge_class);
   }
@@ -1680,6 +1682,13 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
               ? "Wi-Fi is up. Review or update cloud, local printer access and UI settings below."
               : "Only the Wi-Fi step is available while the ESP is running its setup access point.";
   html += "</div>";
+#ifdef PRINTSPHERE_NO_CLOUD
+  html += "<div class=\"hint-box warn\"><strong>No-cloud test build:</strong> "
+          "All Bambu Cloud features are removed from this firmware. It never logs in to "
+          "Bambu Cloud or opens any cloud connection, Connection Mode is fixed to Local "
+          "Only, and printers must be added with their local IP, serial and access code. "
+          "For testing only.</div>";
+#endif
 #ifdef PRINTSPHERE_TARGET_H2X2D
   html += "<div class=\"hint-box warn\"><strong>H2/X2D build - known issues:</strong> "
           "This build targets the H2 family and X2D, and defaults to Local Only because "
@@ -1714,6 +1723,10 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
     end_collapsible_section();
   };
   const auto render_cloud_section = [&]() {
+#ifdef PRINTSPHERE_NO_CLOUD
+    // No-cloud test build: no cloud login UI at all.
+    return;
+#endif
     begin_collapsible_section(
         "Bambu Cloud",
         "Primary source for cloud monitoring, cover image, project metadata and cloud lifecycle. Use Connect to start the login immediately. If Bambu asks for a verification code or 2FA code, you can complete that step here.",
@@ -2228,7 +2241,12 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
       end_settings_panel();
     }
 
+#ifdef PRINTSPHERE_NO_CLOUD
+    // No-cloud test build: Connection Mode is fixed to Local Only.
+    if (false) {
+#else
     if (show_connection_steps) {
+#endif
       begin_settings_panel(
           "Connection Mode",
           "Choose which runtime path drives the UI. This rewires active clients after restart.",
@@ -2403,7 +2421,11 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
       }
       html += "</div>";
     }
+#ifdef PRINTSPHERE_NO_CLOUD
+    if (false) {
+#else
     if (cloud.is_configured()) {
+#endif
       html += "<div style=\"margin-top:12px\"><button type=\"button\" class=\"secondary\" id=\"load-cloud-printers-btn\">Load Cloud Printers</button>"
               "<span id=\"cloud-printers-status\" style=\"margin-left:10px;font-size:0.85em;color:#888\"></span></div>";
     }

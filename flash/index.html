@@ -574,6 +574,15 @@
           otaUrl: "https://github.com/dssoftx/BambuSphere/blob/main/release/dev/printsphere_ota.bin",
           note: "Rebuilt and republished automatically on every push to main - not manually tested, and may be broken or unstable at any given moment. Adds an on-screen overlay (CPU usage and free internal RAM top-left of the printer name, free PSRAM and MCU temperature top-right) for testing firmware performance and optimization; not present in any other build. For normal use, pick Stable or Beta above instead.",
         },
+        {
+          label: "Test: no cloud (auto-built from latest main, 1.75 AMOLED)",
+          channel: "Dev",
+          version: "nocloud",
+          path: "../release/nocloud/printsphere_full.bin",
+          displayPath: "release/nocloud/printsphere_full.bin",
+          otaUrl: "https://github.com/dssoftx/BambuSphere/blob/main/release/nocloud/printsphere_ota.bin",
+          note: "Testing build with every Bambu Cloud feature removed: it never logs in to Bambu Cloud or opens any cloud connection, Connection Mode is fixed to Local Only, and the cloud sections are hidden in Web Config. Printers must be added with their local IP, serial number and access code (on H2/X2D this needs Developer Mode on the printer). Rebuilt automatically on every push to main and not manually tested. For normal use, pick Stable or Beta above instead.",
+        },
       ];
 
       const select = document.querySelector("#firmware-select");
