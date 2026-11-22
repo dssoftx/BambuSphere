@@ -1,7 +1,10 @@
-# BambuSphere v1.8.4 (beta)
+# BambuSphere v1.8.4 (stable)
 
-Small feature release on top of v1.8.3. Intended to become the next stable
-release once confirmed on hardware.
+Small feature release on top of v1.8.3. Promoted from beta to **Stable**
+after testing on hardware, as the single stable build for every supported
+printer. The separate localnative build is no longer offered in the web
+flasher: the mainline build works in Hybrid, Cloud only and Local only mode
+(choose in Web Config).
 
 ## Release Scope
 
@@ -19,6 +22,6 @@ built-in BambuSphere defaults and is saved immediately, no restart needed.
 
 ## Web flasher
 
-The localnative builds are no longer labelled "H2/X2D" in the web flasher.
-They are the local-first builds (Connection Mode defaults to Local Only) and
-apply to any printer, not just the H2 family and X2D.
+The web flasher now offers one Stable build, v1.8.4, for all printers. The
+localnative builds and the separate beta entries were removed; the Dev and
+no-cloud test builds are still auto-built from `main`.

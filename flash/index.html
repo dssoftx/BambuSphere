@@ -530,40 +530,13 @@
     <script>
       const firmwares = [
         {
-          label: "Stable v1.8.0 (1.75 AMOLED)",
+          label: "Stable v1.8.4 (1.75 AMOLED)",
           channel: "Stable",
-          version: "v1.8.0",
+          version: "v1.8.4",
           path: "../release/initial/printsphere_full.bin",
           displayPath: "release/initial/printsphere_full.bin",
           otaUrl: "https://github.com/dssoftx/BambuSphere/blob/main/release/ota/printsphere_ota.bin",
-          note: "Factory flash erases device data before installing v1.8.0. Keep the USB cable connected after the flash: the Wi-Fi picker appears automatically, so the setup hotspot is only needed as a fallback. Promoted from the v1.8.0 beta after testing: every configured printer now stays connected in the background at all times - local MQTT for every configured printer, and Bambu Cloud subscribed to every cloud-bound printer on one session - so switching the active printer on-screen is instant instead of waiting on a fresh reconnect. Also a round of performance work: more internal RAM freed by moving long-lived task stacks to PSRAM, verbose TLS/diagnostic logging trimmed, and the display refresh rate tuned from 60 to 30 Hz to cut CPU load. See the v1.8.0 release notes for details. If your printer is an H2 family model or X2D, use the dedicated v1.8.0-localnative build below instead.",
-        },
-        {
-          label: "Stable v1.8.0-localnative (1.75 AMOLED)",
-          channel: "Stable",
-          version: "v1.8.0-localnative",
-          path: "../release/h2x2d/initial/printsphere_full.bin",
-          displayPath: "release/h2x2d/initial/printsphere_full.bin",
-          otaUrl: "https://github.com/dssoftx/BambuSphere/blob/main/release/h2x2d/ota/printsphere_ota.bin",
-          note: "Factory flash erases device data before installing v1.8.0-localnative. Keep the USB cable connected after the flash: the Wi-Fi picker appears automatically, so the setup hotspot is only needed as a fallback. Built specifically for the H2 family and X2D: Connection Mode defaults to Local Only on a fresh config (Cloud/Hybrid remain selectable in Web Config), and Web Config shows a warning about known issues on this printer family - random MQTT disconnects, the ESP32 running warm to the touch, and Hybrid/Cloud mode being slow without Developer Mode enabled on the printer. Promoted from beta after testing: same always-on multi-printer background connections and performance work as the mainline v1.8.0 above. See the v1.8.0 release notes for details.",
-        },
-        {
-          label: "Beta v1.8.4 (1.75 AMOLED)",
-          channel: "Beta",
-          version: "v1.8.4",
-          path: "../release/beta/printsphere_full.bin",
-          displayPath: "release/beta/printsphere_full.bin",
-          otaUrl: "https://github.com/dssoftx/BambuSphere/blob/main/release/beta/printsphere_ota.bin",
-          note: "Adds a Reset to Defaults button to Web Config > Arc Colors. Includes the v1.8.3 Bambu Cloud login fix: requests now identify honestly as PrintSphere instead of impersonating OrcaSlicer, 2FA login uses a CSRF token like Bambu's web sign-in, a rejected password is no longer retried every 15 seconds, and Cloudflare blocks / rate limits are detected and waited out (ported from upstream PrintSphere). Also includes everything from v1.8.2: removes the camera page (broken by a Bambu Lab API change), shows the device IP on the last (brightness) page, adds a Default Screen option in Web Config > Display Preferences to pick the tab the device opens on at power-up, and moves the main-page battery percentage right so it no longer overlaps the print percentage. Builds on the v1.8.1 beta: more Bambu Cloud regions, 24-hour/12-hour clock toggle and optional Layer: X / Y line. See the v1.8.4 release notes for details. For a local-first build that defaults to Local Only, use the v1.8.4-localnative beta below.",
-        },
-        {
-          label: "Beta v1.8.4-localnative (1.75 AMOLED)",
-          channel: "Beta",
-          version: "v1.8.4-localnative",
-          path: "../release/h2x2d/beta/printsphere_full.bin",
-          displayPath: "release/h2x2d/beta/printsphere_full.bin",
-          otaUrl: "https://github.com/dssoftx/BambuSphere/blob/main/release/h2x2d/beta/printsphere_ota.bin",
-          note: "Same changes as the v1.8.4 beta above (Arc Colors reset button, Bambu Cloud login fix, camera removal, device IP, Default Screen, battery %), as the local-first build: Connection Mode defaults to Local Only on a fresh config (Cloud/Hybrid remain selectable in Web Config). Originally made for the H2 family and X2D, so Web Config also shows notes about known issues on those printers. See the v1.8.4 release notes for details.",
+          note: "Factory flash erases device data before installing v1.8.4. Keep the USB cable connected after the flash: the Wi-Fi picker appears automatically, so the setup hotspot is only needed as a fallback. One build for every supported printer, promoted from the v1.8.4 beta after testing. Fixes Bambu Cloud login (requests identify honestly as PrintSphere instead of impersonating OrcaSlicer, 2FA login uses a CSRF token, no more password retry loop, Cloudflare blocks / rate limits are detected and waited out), removes the camera page (broken by a Bambu Lab API change), shows the device IP on the last (brightness) page, adds a Default Screen option and an Arc Colors Reset to Defaults button in Web Config, and moves the main-page battery percentage clear of the print percentage. Also includes more Bambu Cloud regions, a 24-hour/12-hour clock toggle and an optional Layer: X / Y line. Works in Hybrid, Cloud only or Local only mode (choose in Web Config). See the v1.8.4 release notes for details.",
         },
         {
           label: "Dev (auto-built from latest main, 1.75 AMOLED)",
@@ -599,6 +572,9 @@
       let manifestUrl = null;
 
       function appendOptionGroup(label, entries) {
+        if (entries.length === 0) {
+          return;
+        }
         const group = document.createElement("optgroup");
         group.label = label;
         entries.forEach((firmware) => {

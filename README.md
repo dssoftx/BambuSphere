@@ -6,7 +6,7 @@ It works directly with Bambu Cloud, the printer's local connection, or both. Hom
 
 <img width="640" alt="BambuSphere AMOLED display" src="horizontalcover.jpg" />
 
-Latest stable version: **v1.7.0**
+Latest stable version: **v1.8.4**
 
 ## About this fork
 
@@ -139,6 +139,7 @@ After initial setup, Web Config can be protected with a temporary six-digit PIN.
 ## Links
 
 - [BambuSphere Web Installer](https://dssoftx.github.io/BambuSphere/flash/)
+- [v1.8.4 release notes](release/RELEASE_NOTES_v1.8.4.md) — current stable, one build for all printers
 - [v1.7.0 release notes](release/RELEASE_NOTES_v1.7.0.md)
 - [v1.7.1 (beta) release notes](release/RELEASE_NOTES_v1.7.1.md) — dual-nozzle and HMS-code display fixes, available in the installer's beta channel
 - [v1.7.2 (beta) release notes](release/RELEASE_NOTES_v1.7.2.md) — H2 family/X2D nozzle-temp and watchdog fixes, plus a dedicated H2/X2D build variant; available in the installer's beta channel
