@@ -47,20 +47,11 @@ constexpr int kRingStrokeWidth = 22;
 // into the ring on a round display; also narrowed to fit comfortably.
 constexpr int kRemainingRowY = 145;
 constexpr int kRemainingRowWidth = 260;
-constexpr int kPage3CameraWidth = 400;
-constexpr int kPage3CameraHeight = 224;
-constexpr int kPage3CameraYOffset = 0;
-constexpr int kPage3NoteWithImageY = 150;
-constexpr int kPage3SubnoteWithImageY = 182;
-// Status text shown above the camera JPEG when an image is loaded.
-// Image is 224 high and centered at y=0, so its top is ~y=-112; the
-// status sits above with comfortable breathing room.
-constexpr int kPage3StatusAboveImageY = -138;
 // Clock page (kPageIdxPreview) layout.
 constexpr int kClockTimeY = -20;
 constexpr int32_t kClockTimeScale = 800;  // ~313% of dosis_40's native size.
 constexpr int kClockRemainingRowY = kRemainingRowY;
-// Default (camera page) progress-% overlay position/size.
+// Default progress-% overlay position/size (small, high).
 constexpr int kProgressLabelDefaultY = -178;
 // Bigger + lower on the main page only (mockup #1's prominent "100%").
 constexpr int32_t kMainProgressScale = 400;  // 156% of dosis_40's native size.
@@ -74,6 +65,18 @@ constexpr int kBrightnessBarWidth = 64;
 constexpr int kBrightnessBarHeight = 220;
 constexpr int kBrightnessBarY = -20;
 constexpr int kBrightnessLabelY = 130;
+// Device IP line, below the brightness percentage on the self-settings page.
+constexpr int kSettingsIpLabelY = 172;
+// Battery overlay (icon + %), shown on the main page. The icon stays at its
+// original spot; the percentage sits further right so it clears the enlarged
+// main-page progress-% label (kMainProgressY / kMainProgressScale), whose
+// "100%" glyphs extend to roughly x=+62 at this height.
+constexpr int kBatteryRowY = -140;
+constexpr int kBatteryIconX = -20;
+constexpr int kBatteryPctX = 100;
+// AMS as default screen: AMS pages only exist once the printer reports its
+// AMS units, so give the first snapshot this long to arrive after boot.
+constexpr uint64_t kDefaultScreenAmsWaitMs = 30000ULL;
 // Main page (kPageIdxMain) layout, top to bottom: status pill -> printer-name
 // line -> nozzle/bed chip row -> remaining-time chip (kRemainingRowY, below).
 constexpr int kMainStatusY = -70;
@@ -263,46 +266,6 @@ class LvglLockGuard {
 uint32_t LvglLockGuard::lock_fail_count_ = 0;
 uint32_t LvglLockGuard::total_acquires_ = 0;
 thread_local LvglLockGuard* LvglLockGuard::active_ = nullptr;
-
-const char* ram_region(const void* ptr) {
-  if (ptr == nullptr) {
-    return "null";
-  }
-#if defined(CONFIG_SPIRAM) && CONFIG_SPIRAM
-  return esp_ptr_external_ram(ptr) ? "psram" : "internal";
-#else
-  return "internal";
-#endif
-}
-
-size_t allocated_size(const void* ptr) {
-  return ptr == nullptr ? 0U : heap_caps_get_allocated_size(const_cast<void*>(ptr));
-}
-
-void log_heap_diag(const char* context) {
-  ESP_LOGV(kTag,
-           "[RAM] %s: int_free=%u int_largest=%u dma_free=%u dma_largest=%u "
-           "psram_free=%u psram_largest=%u",
-           context != nullptr ? context : "-",
-           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
-           static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)),
-           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_DMA)),
-           static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_DMA)),
-           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
-           static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)));
-}
-
-void log_blob_diag(const char* context, const std::shared_ptr<std::vector<uint8_t>>& blob) {
-  const void* data = blob && !blob->empty() ? blob->data() : nullptr;
-  ESP_LOGV(kTag,
-           "[RAM] %s: size=%u capacity=%u alloc=%u ram=%s data=%p",
-           context != nullptr ? context : "-",
-           static_cast<unsigned>(blob ? blob->size() : 0U),
-           static_cast<unsigned>(blob ? blob->capacity() : 0U),
-           static_cast<unsigned>(allocated_size(data)),
-           ram_region(data), data);
-  log_heap_diag(context);
-}
 
 bsp_display_rotation_t bsp_rotation_for(DisplayRotation rotation) {
   switch (rotation) {
@@ -559,24 +522,6 @@ std::string optional_temperature_text(const char* label, float temperature_c, bo
   char buffer[40] = {};
   std::snprintf(buffer, sizeof(buffer), "%s %.0f%s", label, temperature_c, kDegreeC);
   return buffer;
-}
-
-bool configure_camera_rgb565(const std::shared_ptr<std::vector<uint8_t>>& decoded_blob,
-                             uint16_t width, uint16_t height, lv_image_dsc_t* image_dsc) {
-  if (!decoded_blob || decoded_blob->empty() || image_dsc == nullptr || width == 0U || height == 0U) {
-    return false;
-  }
-
-  std::memset(image_dsc, 0, sizeof(*image_dsc));
-  image_dsc->header.magic = LV_IMAGE_HEADER_MAGIC;
-  image_dsc->header.cf = LV_COLOR_FORMAT_RGB565;
-  image_dsc->header.flags = 0;
-  image_dsc->header.w = width;
-  image_dsc->header.h = height;
-  image_dsc->header.stride = static_cast<uint16_t>(width * sizeof(uint16_t));
-  image_dsc->data_size = static_cast<uint32_t>(decoded_blob->size());
-  image_dsc->data = decoded_blob->data();
-  return true;
 }
 
 uint32_t scale_color(uint32_t color, uint16_t scale_0_to_255) {
@@ -1100,41 +1045,17 @@ std::string eta_text(const PrinterSnapshot& snapshot, bool use_24h) {
   return format_wall_clock(local, use_24h);
 }
 
-std::string camera_note_text(const PrinterSnapshot& snapshot) {
-  if (snapshot.camera_blob && !snapshot.camera_blob->empty()) {
-    // The camera header shares its position with the global battery overlay.
-    // Prefer the battery state whenever a battery is installed (including
-    // charging); on USB-only power the header instead shows the print status.
-    return (snapshot.battery_present || snapshot.charging) ? std::string{} : lifecycle_label(snapshot);
+// Self-settings page IP line: the station IP once Wi-Fi is up, otherwise the
+// setup access point address while that AP is active.
+std::string device_ip_text(const PrinterSnapshot& snapshot) {
+  if (snapshot.wifi_connected && !snapshot.wifi_ip.empty()) {
+    return "IP " + snapshot.wifi_ip;
   }
-  if (snapshot.connection == PrinterConnectionState::kWaitingForCredentials) {
-    return "Set up printer";
+  if (snapshot.setup_ap_active) {
+    return "Setup AP " + (snapshot.setup_ap_ip.empty() ? std::string("192.168.4.1")
+                                                       : snapshot.setup_ap_ip);
   }
-  if (!snapshot.wifi_connected) {
-    return "Camera offline";
-  }
-  if (!snapshot.camera_detail.empty()) {
-    return snapshot.camera_detail;
-  }
-  return "Tap for new image";
-}
-
-std::string camera_subnote_text(const PrinterSnapshot& snapshot) {
-  if (snapshot.camera_blob && !snapshot.camera_blob->empty()) {
-    // Image is loaded: show layer progress below the snapshot so the cam page
-    // carries the print-in-progress info that the dashboard usually owns.
-    if (snapshot.total_layers > 0 || snapshot.current_layer > 0) {
-      return layer_text(snapshot);
-    }
-    if (!snapshot.job_name.empty()) {
-      return snapshot.job_name;
-    }
-    return {};
-  }
-  if (!snapshot.job_name.empty()) {
-    return snapshot.job_name;
-  }
-  return "Auto-refresh every 2s";
+  return "No Wi-Fi";
 }
 
 const char* mdi_battery_symbol(const PrinterSnapshot& snapshot) {
@@ -1239,6 +1160,26 @@ void Ui::set_display_rotation(DisplayRotation rotation) {
 
 void Ui::set_clock_format_24h(bool use_24h) {
   clock_format_24h_ = use_24h;
+}
+
+void Ui::set_default_screen(DefaultScreen screen) {
+  default_screen_ = screen;
+}
+
+int Ui::default_screen_page_locked() const {
+  switch (default_screen_) {
+    case DefaultScreen::kPrinters:
+      return kPageIdxPrinterSelect;
+    case DefaultScreen::kAms:
+      return kPageIdxAmsFirst;
+    case DefaultScreen::kClock:
+      return kPageIdxPreview;
+    case DefaultScreen::kSettings:
+      return kPageIdxSelfSettings;
+    case DefaultScreen::kMain:
+    default:
+      return kPageIdxMain;
+  }
 }
 
 void Ui::set_show_layer_lines(bool show) {
@@ -1353,13 +1294,6 @@ void Ui::set_arc_color_scheme(const ArcColorScheme& colors) {
     return;
   }
   apply_ring_visual_locked(last_snapshot_);
-}
-
-bool Ui::consume_camera_refresh_request() {
-  std::lock_guard<std::mutex> lock(camera_refresh_mutex_);
-  const bool requested = camera_refresh_requested_;
-  camera_refresh_requested_ = false;
-  return requested;
 }
 
 bool Ui::consume_chamber_light_toggle_request() {
@@ -1874,12 +1808,6 @@ void Ui::apply_ring_visual_locked(const PrinterSnapshot& snapshot) {
     const lv_color_t text_color = lv_color_hex(text_hex);
     lv_obj_set_style_text_color(progress_label_, text_color, 0);
     lv_obj_set_style_text_color(status_label_, text_color, 0);
-    // Camera page mirrors the main-page status line: same font/size and
-    // the same lifecycle-driven color (green while printing, red on
-    // failure, etc.) instead of a fixed white.
-    if (page3_note_ != nullptr) {
-      lv_obj_set_style_text_color(page3_note_, text_color, 0);
-    }
     last_ring_text_hex_ = text_hex;
   }
 }
@@ -2092,8 +2020,6 @@ void Ui::apply_snapshot_locked(const PrinterSnapshot& snapshot, bool force_ring_
   }
 
   LvglLockGuard::note_phase("clock");
-  const std::string camera_note = camera_note_text(snapshot);
-  const std::string camera_subnote = camera_subnote_text(snapshot);
   {
     // Big HH:MM clock + small remaining-time chip, mirroring the main page's
     // remaining row. "--:--" placeholder until SNTP has synced (same
@@ -2112,88 +2038,7 @@ void Ui::apply_snapshot_locked(const PrinterSnapshot& snapshot, bool force_ring_
 
   update_print_buttons_locked(snapshot);
 
-  LvglLockGuard::note_phase("camera");
-  bool has_camera_image =
-      camera_slot_initialized_ && camera_blobs_[active_camera_slot_] &&
-      !camera_blobs_[active_camera_slot_]->empty();
-  if (snapshot.camera_blob && !snapshot.camera_blob->empty() && snapshot.camera_width > 0U &&
-      snapshot.camera_height > 0U) {
-    const bool camera_blob_changed =
-        !camera_slot_initialized_ || camera_blobs_[active_camera_slot_].get() != snapshot.camera_blob.get();
-    if (camera_blob_changed ||
-        last_camera_width_ != snapshot.camera_width || last_camera_height_ != snapshot.camera_height) {
-      const uint8_t next_slot =
-          camera_slot_initialized_ ? static_cast<uint8_t>((active_camera_slot_ + 1U) % 2U) : 0U;
-      log_blob_diag("ui camera incoming rgb565", snapshot.camera_blob);
-      lv_image_cache_drop(&camera_image_dscs_[next_slot]);
-      log_heap_diag("ui camera after cache drop");
-      lv_image_dsc_t next_dsc = {};
-      if (configure_camera_rgb565(snapshot.camera_blob, snapshot.camera_width, snapshot.camera_height,
-                                  &next_dsc)) {
-        camera_blobs_[next_slot] = snapshot.camera_blob;
-        camera_image_dscs_[next_slot] = next_dsc;
-        active_camera_slot_ = next_slot;
-        camera_slot_initialized_ = true;
-        last_camera_width_ = snapshot.camera_width;
-        last_camera_height_ = snapshot.camera_height;
-        lv_image_set_src(page3_image_, &camera_image_dscs_[active_camera_slot_]);
-        log_heap_diag("ui camera after lv_image_set_src");
-      } else {
-        camera_blobs_[next_slot].reset();
-        std::memset(&camera_image_dscs_[next_slot], 0, sizeof(camera_image_dscs_[next_slot]));
-        if (!camera_slot_initialized_) {
-          active_camera_slot_ = 0;
-        }
-        last_camera_width_ = 0;
-        last_camera_height_ = 0;
-      }
-    }
-    has_camera_image =
-        camera_slot_initialized_ && camera_blobs_[active_camera_slot_] &&
-        !camera_blobs_[active_camera_slot_]->empty();
-  } else {
-    if (camera_slot_initialized_ && page3_image_ != nullptr) {
-      lv_image_set_src(page3_image_, nullptr);
-    }
-    lv_image_cache_drop(&camera_image_dscs_[0]);
-    lv_image_cache_drop(&camera_image_dscs_[1]);
-    camera_blobs_[0].reset();
-    camera_blobs_[1].reset();
-    camera_slot_initialized_ = false;
-    active_camera_slot_ = 0;
-    last_camera_width_ = 0;
-    last_camera_height_ = 0;
-    std::memset(&camera_image_dscs_[0], 0, sizeof(camera_image_dscs_[0]));
-    std::memset(&camera_image_dscs_[1], 0, sizeof(camera_image_dscs_[1]));
-    has_camera_image = false;
-  }
-  camera_image_visible_ = has_camera_image;
-
-  if (camera_text_image_mode_ != has_camera_image) {
-    if (has_camera_image) {
-      // Status note moves above the image; layer/subnote sits below.
-      lv_obj_align(page3_note_, LV_ALIGN_CENTER, 0, kPage3StatusAboveImageY);
-      lv_obj_align(page3_subnote_, LV_ALIGN_CENTER, 0, kPage3NoteWithImageY);
-    } else {
-      lv_obj_align(page3_note_, LV_ALIGN_CENTER, 0, 0);
-      lv_obj_align(page3_subnote_, LV_ALIGN_CENTER, 0, 28);
-    }
-    camera_text_image_mode_ = has_camera_image;
-  }
-  set_hidden(page3_note_, camera_note.empty());
-  if (!camera_note.empty()) {
-    set_label_text_if_changed(page3_note_, camera_note);
-  }
-  set_hidden(page3_subnote_, camera_subnote.empty());
-  if (!camera_subnote.empty()) {
-    // Use the same large font as the main-page layer label when showing
-    // "Layer: X / Y", fall back to the regular small font otherwise.
-    const bool subnote_is_layer =
-        has_camera_image && (snapshot.total_layers > 0 || snapshot.current_layer > 0);
-    lv_obj_set_style_text_font(page3_subnote_,
-                               subnote_is_layer ? &dosis_32 : &lv_font_montserrat_20, 0);
-    set_label_text_if_changed(page3_subnote_, camera_subnote);
-  }
+  set_label_text_if_changed(settings_ip_label_, device_ip_text(snapshot));
 
   show_logo_ = should_show_logo(snapshot);
   const bool chamber_light_clickable = snapshot.chamber_light_supported;
@@ -2777,12 +2622,10 @@ esp_err_t Ui::build_dashboard() {
   }
   page1_ = create_page(pager_);
   page2_ = create_page(pager_);
-  page3_ = create_page(pager_);
   page4_ = create_page(pager_);
   enable_touch_bubble(page0_);
   enable_touch_bubble(page1_);
   enable_touch_bubble(page2_);
-  enable_touch_bubble(page3_);
   enable_touch_bubble(page4_);
 
   // --- Page 0: printer selection ---
@@ -2873,7 +2716,7 @@ esp_err_t Ui::build_dashboard() {
   set_label_text_if_changed(battery_icon_label_, kMdiBattery100);
   lv_obj_set_style_text_font(battery_icon_label_, mdi30, 0);
   lv_obj_set_style_text_color(battery_icon_label_, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_align(battery_icon_label_, LV_ALIGN_CENTER, -20, -140);
+  lv_obj_align(battery_icon_label_, LV_ALIGN_CENTER, kBatteryIconX, kBatteryRowY);
   apply_display_rotation_visual_offset(battery_icon_label_, display_rotation_);
   lv_obj_move_foreground(battery_icon_label_);
 
@@ -2881,7 +2724,7 @@ esp_err_t Ui::build_dashboard() {
   set_label_text_if_changed(battery_pct_label_, "--%");
   lv_obj_set_style_text_font(battery_pct_label_, dosis20, 0);
   lv_obj_set_style_text_color(battery_pct_label_, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_align(battery_pct_label_, LV_ALIGN_CENTER, 20, -140);
+  lv_obj_align(battery_pct_label_, LV_ALIGN_CENTER, kBatteryPctX, kBatteryRowY);
   apply_display_rotation_visual_offset(battery_pct_label_, display_rotation_);
   lv_obj_move_foreground(battery_pct_label_);
 
@@ -3219,39 +3062,7 @@ esp_err_t Ui::build_dashboard() {
   set_label_text_if_changed(page2_stop_button_label_, LV_SYMBOL_STOP);
 #endif  // CONFIG_PRINTSPHERE_EXPERIMENTAL_PRINT_CONTROL
 
-  page3_image_ = lv_image_create(page3_);
-  lv_obj_set_size(page3_image_, board::kDisplayWidth, kPage3CameraHeight);
-  lv_image_set_inner_align(page3_image_, LV_IMAGE_ALIGN_CENTER);
-  lv_obj_align(page3_image_, LV_ALIGN_CENTER, 0, kPage3CameraYOffset);
-  lv_obj_add_flag(page3_image_, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_clear_flag(page3_image_, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_clear_flag(page3_image_, LV_OBJ_FLAG_SCROLLABLE);
-  enable_touch_bubble(page3_image_);
-
-  page3_note_ = lv_label_create(page3_);
-  set_label_text_if_changed(page3_note_, "Tap for new image");
-  lv_obj_set_width(page3_note_, 320);
-  lv_label_set_long_mode(page3_note_, LV_LABEL_LONG_WRAP);
-  lv_obj_set_style_text_align(page3_note_, LV_TEXT_ALIGN_CENTER, 0);
-  // Match the main-page status label (dosis32 / white) so the lifecycle status
-  // line on the camera page reads consistently across pages.
-  lv_obj_set_style_text_font(page3_note_, dosis32, 0);
-  lv_obj_set_style_text_color(page3_note_, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_align(page3_note_, LV_ALIGN_CENTER, 0, 0);
-  enable_touch_bubble(page3_note_);
-
-  page3_subnote_ = lv_label_create(page3_);
-  set_label_text_if_changed(page3_subnote_, "Auto-refresh every 2s");
-  lv_obj_set_width(page3_subnote_, 320);
-  lv_label_set_long_mode(page3_subnote_, LV_LABEL_LONG_WRAP);
-  lv_obj_set_style_text_align(page3_subnote_, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(page3_subnote_, info20, 0);
-  lv_obj_set_style_text_color(page3_subnote_, lv_color_hex(0x888888), 0);
-  lv_obj_align(page3_subnote_, LV_ALIGN_CENTER, 0, 28);
-  lv_obj_add_flag(page3_subnote_, LV_OBJ_FLAG_HIDDEN);
-  enable_touch_bubble(page3_subnote_);
-
-  // --- Page 4: self settings (display brightness) ---
+  // --- Page 4: self settings (display brightness + device IP) ---
   brightness_track_ = lv_obj_create(page4_);
   lv_obj_set_size(brightness_track_, kBrightnessBarWidth, kBrightnessBarHeight);
   lv_obj_set_style_radius(brightness_track_, kBrightnessBarWidth / 2, 0);
@@ -3289,17 +3100,42 @@ esp_err_t Ui::build_dashboard() {
   lv_obj_align(settings_brightness_label_, LV_ALIGN_CENTER, 0, kBrightnessLabelY);
   enable_touch_bubble(settings_brightness_label_);
 
-  lv_obj_add_event_cb(screen_, &Ui::screen_event_cb, LV_EVENT_ALL, this);
-  lv_obj_update_layout(pager_);
-  lv_obj_scroll_to_view(page1_, LV_ANIM_OFF);
+  settings_ip_label_ = lv_label_create(page4_);
+  set_label_text_if_changed(settings_ip_label_, "No Wi-Fi");
+  lv_obj_set_width(settings_ip_label_, 280);
+  lv_label_set_long_mode(settings_ip_label_, LV_LABEL_LONG_CLIP);
+  lv_obj_set_style_text_align(settings_ip_label_, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(settings_ip_label_, info20, 0);
+  lv_obj_set_style_text_color(settings_ip_label_, lv_color_hex(0xA0A0A0), 0);
+  lv_obj_align(settings_ip_label_, LV_ALIGN_CENTER, 0, kSettingsIpLabelY);
+  enable_touch_bubble(settings_ip_label_);
 
-  active_page_ = kPageIdxMain;
+  lv_obj_add_event_cb(screen_, &Ui::screen_event_cb, LV_EVENT_ALL, this);
+  // Boot to the tab chosen in Web Config (Display Preferences > Default
+  // Screen). The AMS tab isn't enabled until the first snapshot reports AMS
+  // units, so that choice starts on the main page and jumps over once the
+  // data arrives (see update_page_availability_locked()).
+  int boot_page = default_screen_page_locked();
+  default_screen_pending_ = false;
+  if (default_screen_ == DefaultScreen::kAms && !page_enabled(boot_page)) {
+    default_screen_pending_ = true;
+    default_screen_deadline_ms_ =
+        static_cast<uint64_t>(esp_timer_get_time() / 1000ULL) + kDefaultScreenAmsWaitMs;
+  }
+  if (!page_enabled(boot_page)) {
+    boot_page = kPageIdxMain;
+  }
+  lv_obj_update_layout(pager_);
+  if (lv_obj_t* boot_page_object = page_object(boot_page); boot_page_object != nullptr) {
+    lv_obj_scroll_to_x(pager_, lv_obj_get_x(boot_page_object), LV_ANIM_OFF);
+  }
+
+  active_page_ = boot_page;
   scrolling_ = false;
   publish_page_state_snapshot();
   deferred_snapshot_pending_ = false;
   detail_visible_ = true;
   show_logo_ = false;
-  camera_text_image_mode_ = false;
   apply_page_visibility();
   update_portal_access_visuals_locked();
   apply_brightness_fill_locked();
@@ -3317,14 +3153,13 @@ void Ui::apply_page_visibility() {
   // side while the user's finger drags.
   const bool on_page1 = !scrolling_ ? (active_page_ == kPageIdxMain) : true;
   const bool on_page2 = !scrolling_ ? (active_page_ == kPageIdxPreview) : true;
-  const bool on_page3 = !scrolling_ ? (active_page_ == kPageIdxCamera) : true;
   const bool on_page4 = !scrolling_ ? (active_page_ == kPageIdxSelfSettings) : true;
   const bool settled_page1 = !scrolling_ && active_page_ == kPageIdxMain;
 
   // The shared progress-% overlay has three looks: bigger + lower on the
   // main page, small but nudged down on the clock/settings pages (clears
   // the ring now that those pages have their own content), and the
-  // original small/high position everywhere else (camera page). Only
+  // original small/high position everywhere else. Only
   // restyle on an actual settle transition, not every call.
   const bool settled_raised_page =
       !scrolling_ && (active_page_ == kPageIdxPreview || active_page_ == kPageIdxSelfSettings);
@@ -3349,13 +3184,11 @@ void Ui::apply_page_visibility() {
         break;
     }
   }
-  // These labels live on lv_layer_top(), so the pager cannot clip them.  The
-  // camera header uses the same position: on battery power (including while
-  // charging) show the battery indicator there; on USB-only power show the
-  // camera page's print status instead.
+  // These labels live on lv_layer_top(), so the pager cannot clip them.
+  // Shown on the main page whenever a battery is installed (including while
+  // charging).
   const bool show_battery_overlay =
-      (last_snapshot_.battery_present || last_snapshot_.charging) &&
-      (settled_page1 || (!scrolling_ && active_page_ == kPageIdxCamera));
+      (last_snapshot_.battery_present || last_snapshot_.charging) && settled_page1;
   const bool portal_hint_has_priority = portal_pin_active_ || portal_session_active_;
   const bool show_portal_hint =
       settled_page1 && !portal_hint_text_.empty() &&
@@ -3366,7 +3199,6 @@ void Ui::apply_page_visibility() {
       set_hidden(ams_pages_[u], !ams_unit_present_[u]);
     }
   }
-  set_hidden(page3_, !camera_page_available_);
   set_hidden(status_label_, !on_page1);
   set_hidden(detail_label_, !on_page1 || !detail_visible_ || show_portal_hint);
 #ifdef PRINTSPHERE_DEV_DIAGNOSTICS
@@ -3391,9 +3223,9 @@ void Ui::apply_page_visibility() {
   set_hidden(portal_hint_label_, !show_portal_hint);
   set_hidden(page2_time_label_, !on_page2);
   set_hidden(page2_remaining_row_, !on_page2);
-  set_hidden(page3_image_, !on_page3 || !camera_image_visible_);
   set_hidden(brightness_track_, !on_page4);
   set_hidden(settings_brightness_label_, !on_page4);
+  set_hidden(settings_ip_label_, !on_page4);
 
   // Overlay + page0 opacity are driven by apply_page0_parallax.
   // When not scrolling, snap to final state.
@@ -3414,7 +3246,6 @@ void Ui::apply_logo_visibility() {
 }
 
 void Ui::update_page_availability_locked(const PrinterSnapshot& snapshot) {
-  const bool camera_available = snapshot.camera_page_available;
   const uint8_t ams_count = snapshot.ams ? snapshot.ams->count : 0;
   bool ams_changed = false;
   for (int u = 0; u < kMaxAmsUnits; ++u) {
@@ -3424,11 +3255,7 @@ void Ui::update_page_availability_locked(const PrinterSnapshot& snapshot) {
       ams_changed = true;
     }
   }
-  const bool availability_changed = camera_page_available_ != camera_available || ams_changed;
-
-  camera_page_available_ = camera_available;
-
-  if (!availability_changed) {
+  if (!ams_changed) {
     return;
   }
 
@@ -3437,26 +3264,18 @@ void Ui::update_page_availability_locked(const PrinterSnapshot& snapshot) {
       set_hidden(ams_pages_[u], !ams_unit_present_[u]);
     }
   }
-  set_hidden(page3_, !camera_page_available_);
-
-  if (!camera_page_available_) {
-    if (camera_slot_initialized_ && page3_image_ != nullptr) {
-      lv_image_set_src(page3_image_, nullptr);
-    }
-    lv_image_cache_drop(&camera_image_dscs_[0]);
-    lv_image_cache_drop(&camera_image_dscs_[1]);
-    camera_blobs_[0].reset();
-    camera_blobs_[1].reset();
-    camera_slot_initialized_ = false;
-    active_camera_slot_ = 0;
-    last_camera_width_ = 0;
-    last_camera_height_ = 0;
-    std::memset(&camera_image_dscs_[0], 0, sizeof(camera_image_dscs_[0]));
-    std::memset(&camera_image_dscs_[1], 0, sizeof(camera_image_dscs_[1]));
-    camera_image_visible_ = false;
-  }
-
   active_page_ = clamp_enabled_page(active_page_);
+  // Default screen = AMS: jump over as soon as the first AMS unit shows up
+  // (unless the user already touched the screen; see handle_screen_event).
+  if (default_screen_pending_) {
+    const uint64_t now_ms = static_cast<uint64_t>(esp_timer_get_time() / 1000ULL);
+    if (now_ms > default_screen_deadline_ms_) {
+      default_screen_pending_ = false;
+    } else if (page_enabled(kPageIdxAmsFirst)) {
+      active_page_ = kPageIdxAmsFirst;
+      default_screen_pending_ = false;
+    }
+  }
   lv_obj_update_layout(pager_);
   if (lv_obj_t* target_page = page_object(active_page_); target_page != nullptr) {
     lv_obj_scroll_to_view(target_page, LV_ANIM_OFF);
@@ -3482,9 +3301,6 @@ bool Ui::page_enabled(int page) const {
     // replaced (which needed cloud connectivity / non-Local-Only mode).
     return true;
   }
-  if (page == kPageIdxCamera) {
-    return camera_page_available_;
-  }
   if (page == kPageIdxSelfSettings) {
     return true;
   }
@@ -3503,9 +3319,6 @@ lv_obj_t* Ui::page_object(int page) const {
   }
   if (page == kPageIdxPreview) {
     return page2_;
-  }
-  if (page == kPageIdxCamera) {
-    return page3_;
   }
   if (page == kPageIdxSelfSettings) {
     return page4_;
@@ -3586,11 +3399,6 @@ void Ui::set_active_page(int page) {
   active_page_ = clamped_page;
   if (clamped_page == 0 && previous_page != 0) {
     replay_card_animations_locked();
-  }
-  if (previous_page != clamped_page && active_page_ == kPageIdxCamera &&
-      camera_page_available_) {
-    std::lock_guard<std::mutex> lock(camera_refresh_mutex_);
-    camera_refresh_requested_ = true;
   }
   scrolling_ = false;
   publish_page_state_snapshot();
@@ -3726,6 +3534,9 @@ void Ui::handle_screen_event(lv_event_t* event) {
   lv_indev_get_point(indev, &point);
 
   if (code == LV_EVENT_PRESSED) {
+    // Any touch means the user is navigating on their own — don't yank them
+    // to the AMS default screen if its data shows up later.
+    default_screen_pending_ = false;
     set_pager_scroll_locked(false);
     if (screen_power_mode_ == ScreenPowerMode::kOff) {
       // First touch wakes the screen; a second touch performs UI actions.
@@ -3758,7 +3569,7 @@ void Ui::handle_screen_event(lv_event_t* event) {
     }
 
     // Vertical swipe means brightness on the self-settings page (Change 4);
-    // everywhere else (including AMS/clock/camera pages) it cycles the active
+    // everywhere else (including AMS/clock pages) it cycles the active
     // printer instead (Change 1). The printer-select page keeps its own
     // vertical-scrolling card list + tap-to-switch, so it opts out entirely.
     const bool on_settings_page = active_page_ == kPageIdxSelfSettings;
@@ -3833,12 +3644,6 @@ void Ui::handle_screen_event(lv_event_t* event) {
 
   if ((code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) && gesture_active_) {
     note_activity(false);
-    const int dx = static_cast<int>(point.x - gesture_start_x_);
-    const int dy = static_cast<int>(gesture_start_y_ - point.y);
-    const int abs_dx = std::abs(dx);
-    const int abs_dy = std::abs(dy);
-    const bool swipe_locked = swipe_switched_;
-
     gesture_active_ = false;
     swipe_switched_ = false;
     set_pager_scroll_locked(false);
@@ -3853,17 +3658,8 @@ void Ui::handle_screen_event(lv_event_t* event) {
       }
       return;
     }
-    if (swipe_locked) {
-      return;
-    }
-
     // Horizontal page swiping is handled by the LVGL pager (flex-row +
     // LV_SCROLL_SNAP_NONE → handle_pager_event snaps to nearest page on SCROLL_END).
-    // Only handle taps here (camera refresh on page 3).
-    if (active_page_ == kPageIdxCamera && camera_page_available_ && abs_dx < 12 && abs_dy < 12) {
-      std::lock_guard<std::mutex> lock(camera_refresh_mutex_);
-      camera_refresh_requested_ = true;
-    }
   }
 }
 

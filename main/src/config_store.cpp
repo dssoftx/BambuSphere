@@ -167,6 +167,38 @@ DisplayRotation parse_display_rotation(const std::string& value) {
   return DisplayRotation::k0;
 }
 
+const char* to_string(DefaultScreen screen) {
+  switch (screen) {
+    case DefaultScreen::kPrinters:
+      return "printers";
+    case DefaultScreen::kAms:
+      return "ams";
+    case DefaultScreen::kClock:
+      return "clock";
+    case DefaultScreen::kSettings:
+      return "settings";
+    case DefaultScreen::kMain:
+    default:
+      return "main";
+  }
+}
+
+DefaultScreen parse_default_screen(const std::string& value) {
+  if (value == "printers") {
+    return DefaultScreen::kPrinters;
+  }
+  if (value == "ams") {
+    return DefaultScreen::kAms;
+  }
+  if (value == "clock") {
+    return DefaultScreen::kClock;
+  }
+  if (value == "settings") {
+    return DefaultScreen::kSettings;
+  }
+  return DefaultScreen::kMain;
+}
+
 esp_err_t ConfigStore::initialize() {
   esp_err_t err = nvs_flash_init();
   if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -287,6 +319,10 @@ bool ConfigStore::load_clock_format_24h() const {
 
 bool ConfigStore::load_show_layer_lines_enabled() const {
   return parse_bool_or_default(load_string("layer_lines"), false);
+}
+
+DefaultScreen ConfigStore::load_default_screen() const {
+  return parse_default_screen(load_string("boot_screen"));
 }
 
 int ConfigStore::load_audio_volume_percent() const {
@@ -419,6 +455,10 @@ esp_err_t ConfigStore::save_clock_format_24h(bool use_24h) const {
 
 esp_err_t ConfigStore::save_show_layer_lines_enabled(bool enabled) const {
   return save_string("layer_lines", enabled ? "1" : "0");
+}
+
+esp_err_t ConfigStore::save_default_screen(DefaultScreen screen) const {
+  return save_string("boot_screen", to_string(screen));
 }
 
 esp_err_t ConfigStore::save_audio_volume_percent(int volume) const {

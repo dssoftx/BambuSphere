@@ -148,8 +148,6 @@ const char* to_string(FieldSource source) {
 namespace {
 
 struct ModelCapabilityFlags {
-  bool jpeg_camera;
-  bool rtsp_camera;
   bool chamber_temperature;
   bool secondary_nozzle_temperature;
   bool chamber_light;
@@ -162,22 +160,22 @@ struct ModelCapabilityFlags {
 // Indexed by static_cast<size_t>(PrinterModel). Order MUST match the enum
 // PrinterModel in printer_state.hpp.
 constexpr ModelCapabilityFlags kModelCapabilities[] = {
-    // jpeg   rtsp   chmbT  sNzlT  chmbL  sChmbL local  devLoc cloud
-    /* kUnknown */ {false, false, false, false, false, false, true,  false, false},
-    /* kA1      */ {true,  false, false, false, false, false, true,  false, false},
-    /* kA1Mini  */ {true,  false, false, false, false, false, true,  false, false},
-    /* kP1P     */ {true,  false, false, false, false, false, true,  false, false},
-    /* kP1S     */ {true,  false, false, false, true,  false, true,  false, false},
-    /* kP2S     */ {false, true,  true,  false, true,  false, true,  false, true },
-    /* kH2C     */ {false, true,  true,  false, true,  true,  true,  true,  true },
-    /* kH2D     */ {false, true,  true,  true,  true,  true,  true,  true,  true },
-    /* kH2DPro  */ {false, true,  true,  true,  true,  true,  true,  true,  true },
-    /* kH2S     */ {false, true,  true,  false, true,  true,  true,  true,  true },
-    /* kX1      */ {false, true,  true,  false, true,  false, true,  false, true },
-    /* kX1C     */ {false, true,  true,  false, true,  false, true,  false, true },
-    /* kX1E     */ {false, true,  true,  false, true,  false, true,  false, true },
-    /* kX2D     */ {false, true,  true,  true,  true,  true,  true,  true,  true },
-    /* kA2L     */ {true,  false, false, false, false, false, true,  false, false},
+    // chmbT  sNzlT  chmbL  sChmbL local  devLoc cloud
+    /* kUnknown */ {false, false, false, false, true,  false, false},
+    /* kA1      */ {false, false, false, false, true,  false, false},
+    /* kA1Mini  */ {false, false, false, false, true,  false, false},
+    /* kP1P     */ {false, false, false, false, true,  false, false},
+    /* kP1S     */ {false, false, true,  false, true,  false, false},
+    /* kP2S     */ {true,  false, true,  false, true,  false, true },
+    /* kH2C     */ {true,  false, true,  true,  true,  true,  true },
+    /* kH2D     */ {true,  true,  true,  true,  true,  true,  true },
+    /* kH2DPro  */ {true,  true,  true,  true,  true,  true,  true },
+    /* kH2S     */ {true,  false, true,  true,  true,  true,  true },
+    /* kX1      */ {true,  false, true,  false, true,  false, true },
+    /* kX1C     */ {true,  false, true,  false, true,  false, true },
+    /* kX1E     */ {true,  false, true,  false, true,  false, true },
+    /* kX2D     */ {true,  true,  true,  true,  true,  true,  true },
+    /* kA2L     */ {false, false, false, false, true,  false, false},
 };
 
 constexpr size_t kModelCapabilityCount =
@@ -195,14 +193,6 @@ constexpr const ModelCapabilityFlags& caps_for(PrinterModel model) {
 }
 
 }  // namespace
-
-bool printer_model_has_jpeg_camera(PrinterModel model) {
-  return caps_for(model).jpeg_camera;
-}
-
-bool printer_model_has_rtsp_camera(PrinterModel model) {
-  return caps_for(model).rtsp_camera;
-}
 
 bool printer_model_has_chamber_temperature(PrinterModel model) {
   return caps_for(model).chamber_temperature;
@@ -250,8 +240,6 @@ SourceCapabilities default_local_capabilities_for_model(PrinterModel model) {
   capabilities.temperatures = capabilities.status;
   capabilities.hms = capabilities.status;
   capabilities.print_error = capabilities.status;
-  capabilities.camera_jpeg_socket = printer_model_has_jpeg_camera(model);
-  capabilities.camera_rtsp = printer_model_has_rtsp_camera(model);
   capabilities.developer_mode_required =
       printer_model_requires_developer_mode_for_local_status(model);
   return capabilities;

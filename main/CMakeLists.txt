@@ -11,7 +11,6 @@ set(PRINTSPHERE_MAIN_REQUIRES
     mqtt
     esp_netif
     lwip
-    espressif__esp_new_jpeg
     espressif__esp_codec_dev
     esp-tls
     esp_wifi
@@ -64,7 +63,6 @@ idf_component_register(
         "include/font/mdi_30.c"
         "include/font/mdi_40.c"
         "src/pmu.cpp"
-        "src/p1s_camera_client.cpp"
         "src/printer_client.cpp"
         "src/printer_client_pool.cpp"
         "src/printer_state.cpp"

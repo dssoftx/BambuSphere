@@ -1069,19 +1069,6 @@ uint16_t extract_total_layers_local(const cJSON* print, uint16_t fallback) {
       0));
 }
 
-std::string extract_rtsp_url(const cJSON* print, const std::string& fallback) {
-  const cJSON* ipcam = child_object_local(print, "ipcam");
-  const std::string rtsp_url =
-      json_string_local(ipcam, "rtsp_url", json_string_local(ipcam, "rtspUrl", {}));
-  if (rtsp_url == "disable") {
-    return {};
-  }
-  if (!rtsp_url.empty()) {
-    return rtsp_url;
-  }
-  return fallback;
-}
-
 bool parse_signature_required(const cJSON* print, bool fallback) {
   const std::string fun = json_string_local(print, "fun", {});
   if (fun.empty()) {
@@ -1106,9 +1093,6 @@ void update_local_runtime_metadata(PrinterClient::LocalPrinterRuntimeState* runt
   runtime->local_configured = configured;
   runtime->local_connected = connected;
   runtime->local_capabilities = default_local_capabilities_for_model(runtime->local_model);
-  if (has_text(runtime->camera_rtsp_url)) {
-    runtime->local_capabilities.camera_rtsp = true;
-  }
   if (runtime->local_mqtt_signature_required) {
     runtime->local_capabilities.developer_mode_required = true;
   }
@@ -1320,8 +1304,7 @@ esp_err_t PrinterClient::start() {
 
   // Stack lives in PSRAM (8 MB available) rather than internal SRAM: this
   // task runs for the app's whole lifetime, and internal RAM is the scarce
-  // resource (shared with Wi-Fi/TLS/LVGL). See p1s_camera_client.cpp's
-  // task for the same pattern.
+  // resource (shared with Wi-Fi/TLS/LVGL).
   const BaseType_t result = xTaskCreateWithCaps(&PrinterClient::task_entry, "printer_client",
                                                  8192, this, 5, &task_handle_,
                                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -1376,7 +1359,6 @@ PrinterSnapshot PrinterClient::build_snapshot_from_runtime(
   snapshot.job_name = text_string(runtime.job_name);
   snapshot.gcode_file = text_string(runtime.gcode_file);
   snapshot.preview_hint = preview_hint_for(snapshot.gcode_file);
-  snapshot.camera_rtsp_url = text_string(runtime.camera_rtsp_url);
   snapshot.progress_percent = runtime.progress_percent;
   snapshot.progress_is_download_related = runtime.progress_is_download_related;
   snapshot.nozzle_temp_c = runtime.nozzle_temp_c;
@@ -1890,8 +1872,6 @@ void PrinterClient::handle_report_payload(const char* payload, size_t length) {
     runtime.local_model = detect_printer_model_from_payload(print, runtime.local_model);
     runtime.chamber_light_supported =
         runtime.chamber_light_supported || printer_model_has_chamber_light(runtime.local_model);
-    copy_text(&runtime.camera_rtsp_url,
-              extract_rtsp_url(print, text_string(runtime.camera_rtsp_url)));
     runtime.local_mqtt_signature_required =
         parse_signature_required(print, runtime.local_mqtt_signature_required);
     apply_chamber_light_report(print, &runtime);

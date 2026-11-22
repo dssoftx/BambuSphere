@@ -1318,6 +1318,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   const int audio_volume_cfg = portal->config_store_.load_audio_volume_percent();
   const bool clock_format_24h = portal->config_store_.load_clock_format_24h();
   const bool show_layer_lines_cfg = portal->config_store_.load_show_layer_lines_enabled();
+  const DefaultScreen default_screen_cfg = portal->config_store_.load_default_screen();
   const PrinterProfile active_profile = portal->config_store_.load_active_printer_profile();
   const PrinterConnection printer = active_profile.to_connection();
   const ArcColorScheme arc_colors = portal->config_store_.load_arc_color_scheme();
@@ -1437,7 +1438,10 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   const char* ams_display_badge_class = filament_wake || !filament_anim ? "info" : "idle";
   const std::string display_prefs_badge_value =
       std::string(clock_format_24h ? "24-hour" : "12-hour") +
-      (show_layer_lines_cfg ? " · Layer lines on" : "");
+      (show_layer_lines_cfg ? " · Layer lines on" : "") +
+      (default_screen_cfg != DefaultScreen::kMain
+           ? std::string(" · Boots to ") + to_string(default_screen_cfg)
+           : std::string{});
   const std::string arc_badge_value = arc_colors_custom ? "Custom" : "Default";
   const char* arc_badge_class = arc_colors_custom ? "info" : "idle";
   const int device_settings_count = show_connection_steps ? 6 : 5;
@@ -1783,7 +1787,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   const auto render_local_section = [&]() {
     begin_collapsible_section(
         "Local Printer Path",
-        "The local MQTT path provides live status, layers, temperatures and also powers camera snapshots on page 3.",
+        "The local MQTT path provides live status, layers and temperatures.",
         local_badge_value, local_badge_class, local_section_open, "local-section-pill");
     html += "<div class=\"grid-2\">";
     html += "<div class=\"field\"><label for=\"printer_host\">Printer IP or Hostname</label><input id=\"printer_host\" value=\"";
@@ -1800,8 +1804,8 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
     html += json_escape(local_snapshot.detail);
     html += "</span><div class=\"micro\" id=\"mqtt-local-telemetry\" style=\"margin-top:4px;color:#666;\"></div></div>";
     html += "<div class=\"actions\"><button type=\"button\" class=\"secondary\" id=\"local-connect-button\">Connect Local</button>";
-    html += "<div class=\"micro\">This saves the local printer credentials immediately. In Hybrid and Local only it also reconnects MQTT and camera without rebooting.</div></div>";
-    html += "<p class=\"micro\">In Hybrid mode BambuSphere auto-picks the better status path for your printer and still uses the local camera when available.</p>";
+    html += "<div class=\"micro\">This saves the local printer credentials immediately. In Hybrid and Local only it also reconnects MQTT without rebooting.</div></div>";
+    html += "<p class=\"micro\">In Hybrid mode BambuSphere auto-picks the better status path for your printer.</p>";
     end_collapsible_section();
   };
 
@@ -1858,7 +1862,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
 
     begin_settings_panel(
         "Display Preferences",
-        "Clock format for the ETA row and the big clock page, plus an optional layer-count line under the printer name.",
+        "Clock format for the ETA row and the big clock page, an optional layer-count line under the printer name, and the screen the device opens on when it powers up.",
         display_prefs_badge_value, "info", display_prefs_section_open);
     html += "<div class=\"grid-2\">";
     html += "<div class=\"field\"><label for=\"clock_format\">Clock Format</label><select id=\"clock_format\">";
@@ -1883,7 +1887,34 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
       html += " selected";
     }
     html += ">On</option></select></div>";
+    html += "<div class=\"field\"><label for=\"default_screen\">Default Screen</label><select id=\"default_screen\">";
+    {
+      struct DefaultScreenOption {
+        DefaultScreen screen;
+        const char* label;
+      };
+      static constexpr DefaultScreenOption kDefaultScreenOptions[] = {
+          {DefaultScreen::kMain, "Main dashboard"},
+          {DefaultScreen::kPrinters, "Printer list"},
+          {DefaultScreen::kAms, "AMS"},
+          {DefaultScreen::kClock, "Clock"},
+          {DefaultScreen::kSettings, "Brightness / info"},
+      };
+      for (const auto& option : kDefaultScreenOptions) {
+        html += "<option value=\"";
+        html += to_string(option.screen);
+        html += "\"";
+        if (option.screen == default_screen_cfg) {
+          html += " selected";
+        }
+        html += ">";
+        html += option.label;
+        html += "</option>";
+      }
+    }
+    html += "</select></div>";
     html += "</div>";
+    html += "<p class=\"micro\">Default Screen is the tab shown after the device powers up. AMS falls back to the main dashboard when the printer has no AMS.</p>";
     html += "<div class=\"actions\"><button type=\"button\" class=\"primary hidden\" id=\"display-prefs-apply-button\">Apply + Restart</button>";
     html += "<div class=\"micro hidden\" id=\"display-prefs-apply-hint\">Applied on the next boot.</div></div>";
     end_settings_panel();
@@ -2207,12 +2238,12 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
       if (source_mode == SourceMode::kHybrid) {
         html += " selected";
       }
-      html += ">Hybrid (recommended): auto-pick the best status path for your printer, keep local camera when available</option>";
+      html += ">Hybrid (recommended): auto-pick the best status path for your printer</option>";
       html += "<option value=\"cloud_only\"";
       if (source_mode == SourceMode::kCloudOnly) {
         html += " selected";
       }
-      html += ">Cloud only: cloud monitoring and preview, local MQTT/camera disabled</option>";
+      html += ">Cloud only: cloud monitoring and preview, local MQTT disabled</option>";
       html += "<option value=\"local_only\"";
       if (source_mode == SourceMode::kLocalOnly) {
         html += " selected";
@@ -2376,7 +2407,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
       html += "<div style=\"margin-top:12px\"><button type=\"button\" class=\"secondary\" id=\"load-cloud-printers-btn\">Load Cloud Printers</button>"
               "<span id=\"cloud-printers-status\" style=\"margin-left:10px;font-size:0.85em;color:#888\"></span></div>";
     }
-    html += "<div class=\"hint-box\"><strong>Tip:</strong> Selecting a printer reconnects all paths (cloud, local MQTT, camera) live — no reboot needed.</div>";
+    html += "<div class=\"hint-box\"><strong>Tip:</strong> Selecting a printer reconnects all paths (cloud, local MQTT) live — no reboot needed.</div>";
     end_collapsible_section();
   }
 
@@ -2502,6 +2533,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   html += "const displayRotationApplyHint=document.getElementById('display-rotation-apply-hint');";
   html += "const clockFormatSelect=document.getElementById('clock_format');";
   html += "const showLayerLinesSelect=document.getElementById('show_layer_lines');";
+  html += "const defaultScreenSelect=document.getElementById('default_screen');";
   html += "const displayPrefsApplyButton=document.getElementById('display-prefs-apply-button');";
   html += "const displayPrefsApplyHint=document.getElementById('display-prefs-apply-hint');";
   html += "const portalLockSelect=document.getElementById('portal_lock_enabled');";
@@ -2571,6 +2603,9 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   html += clock_format_24h ? "24" : "12";
   html += "\",show_layer_lines:";
   html += show_layer_lines_cfg ? "true" : "false";
+  html += ",default_screen:\"";
+  html += to_string(default_screen_cfg);
+  html += "\"";
   html += ",portal_lock_enabled:";
   html += portal_lock_enabled ? "true" : "false";
   html += ",printer_host:\"";
@@ -2780,8 +2815,10 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "if(!clockFormatSelect||!showLayerLinesSelect||!displayPrefsApplyButton||!displayPrefsApplyHint)return;"
           "const clockNow=valueOf('clock_format')||'24';"
           "const layerNow=valueOf('show_layer_lines')==='true';"
+          "const screenNow=defaultScreenSelect?(valueOf('default_screen')||'main'):(savedConfig.default_screen||'main');"
           "const changed=clockNow!==(savedConfig.clock_format||'24')"
-              "||layerNow!==(savedConfig.show_layer_lines===true);"
+              "||layerNow!==(savedConfig.show_layer_lines===true)"
+              "||screenNow!==(savedConfig.default_screen||'main');"
           "displayPrefsApplyButton.classList.toggle('hidden',!changed);"
           "displayPrefsApplyHint.classList.toggle('hidden',!changed);"
           "if(!changed){displayPrefsApplyButton.disabled=false;}}";
@@ -2893,13 +2930,15 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "catch(error){setStatus('Rotation change failed','The request to the ESP could not be completed.',8000);displayRotationApplyButton.disabled=false;updateDisplayRotationControls();}});}";
   html += "if(clockFormatSelect){clockFormatSelect.addEventListener('change',updateDisplayPrefsControls);}";
   html += "if(showLayerLinesSelect){showLayerLinesSelect.addEventListener('change',updateDisplayPrefsControls);}";
+  html += "if(defaultScreenSelect){defaultScreenSelect.addEventListener('change',updateDisplayPrefsControls);}";
   html += "if(displayPrefsApplyButton){displayPrefsApplyButton.addEventListener('click',async()=>{"
           "const clock_format=valueOf('clock_format')||'24';const show_layer_lines=valueOf('show_layer_lines')==='true';"
-          "if(clock_format===(savedConfig.clock_format||'24')&&show_layer_lines===(savedConfig.show_layer_lines===true)){updateDisplayPrefsControls();return;}"
-          "displayPrefsApplyButton.disabled=true;setStatus('Applying display preferences...','Saving the clock format and layer-line setting and restarting the ESP now.',15000);"
-          "try{const response=await fetch('/api/display-prefs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clock_format,show_layer_lines})});"
+          "const default_screen=defaultScreenSelect?(valueOf('default_screen')||'main'):(savedConfig.default_screen||'main');"
+          "if(clock_format===(savedConfig.clock_format||'24')&&show_layer_lines===(savedConfig.show_layer_lines===true)&&default_screen===(savedConfig.default_screen||'main')){updateDisplayPrefsControls();return;}"
+          "displayPrefsApplyButton.disabled=true;setStatus('Applying display preferences...','Saving the display preferences and restarting the ESP now.',15000);"
+          "try{const response=await fetch('/api/display-prefs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clock_format,show_layer_lines,default_screen})});"
           "const body=await response.json().catch(()=>({}));"
-          "if(response.ok){savedConfig.clock_format=clock_format;savedConfig.show_layer_lines=show_layer_lines;updateDisplayPrefsControls();setStatus('Saved. Restarting ESP...','The connection will drop briefly during reboot.',30000);}"
+          "if(response.ok){savedConfig.clock_format=clock_format;savedConfig.show_layer_lines=show_layer_lines;savedConfig.default_screen=default_screen;updateDisplayPrefsControls();setStatus('Saved. Restarting ESP...','The connection will drop briefly during reboot.',30000);}"
           "else{setStatus(body.error||'Display preferences change failed',body.detail||'The new display preferences could not be saved.',8000);displayPrefsApplyButton.disabled=false;updateDisplayPrefsControls();}}"
           "catch(error){setStatus('Display preferences change failed','The request to the ESP could not be completed.',8000);displayPrefsApplyButton.disabled=false;updateDisplayPrefsControls();}});}";
   html += "if(portalLockSelect){portalLockSelect.addEventListener('change',updatePortalAccessControls);}";
@@ -3595,6 +3634,9 @@ esp_err_t SetupPortal::handle_config_get(httpd_req_t* request) {
   body += portal->config_store_.load_clock_format_24h() ? "24" : "12";
   body += "\",\"show_layer_lines\":";
   body += portal->config_store_.load_show_layer_lines_enabled() ? "true" : "false";
+  body += ",\"default_screen\":\"";
+  body += to_string(portal->config_store_.load_default_screen());
+  body += "\"";
   body += ",\"tz_iana\":\"" + json_escape(portal->config_store_.load_timezone_iana()) + "\"";
   body += "}";
 
@@ -3899,14 +3941,20 @@ esp_err_t SetupPortal::handle_display_prefs_post(httpd_req_t* request) {
   const bool use_24h = clock_format.empty() ? stored_24h : clock_format != "12";
   const bool show_layer_lines =
       read_bool_field(root, "show_layer_lines", stored_show_layer_lines);
+  const std::string default_screen_field = trim_copy(read_string_field(root, "default_screen"));
+  const DefaultScreen default_screen = default_screen_field.empty()
+                                           ? portal->config_store_.load_default_screen()
+                                           : parse_default_screen(default_screen_field);
   cJSON_Delete(root);
 
-  ESP_LOGI(kTag, "Saving display prefs: clock_24h=%d show_layer_lines=%d", use_24h,
-           show_layer_lines);
+  ESP_LOGI(kTag, "Saving display prefs: clock_24h=%d show_layer_lines=%d default_screen=%s",
+           use_24h, show_layer_lines, to_string(default_screen));
   ESP_RETURN_ON_ERROR(portal->config_store_.save_clock_format_24h(use_24h), kTag,
                       "save clock format failed");
   ESP_RETURN_ON_ERROR(portal->config_store_.save_show_layer_lines_enabled(show_layer_lines), kTag,
                       "save show layer lines failed");
+  ESP_RETURN_ON_ERROR(portal->config_store_.save_default_screen(default_screen), kTag,
+                      "save default screen failed");
 
   if (!portal->reboot_requested_) {
     portal->reboot_requested_ = true;
@@ -4663,7 +4711,6 @@ esp_err_t SetupPortal::handle_local_connect(httpd_req_t* request) {
   PrinterClient& active_client = portal->printer_client_pool_.client_for(profile.index);
   const PrinterSnapshot before = active_client.snapshot();
   portal->printer_client_pool_.ensure_started(profile);
-  portal->camera_client_.configure(printer);
 
   PrinterSnapshot current = before;
   for (int attempt = 0; attempt < 80; ++attempt) {
@@ -4795,7 +4842,6 @@ esp_err_t SetupPortal::handle_printers_select(httpd_req_t* request) {
   const PrinterConnection conn = selected->to_connection();
   if (conn.is_ready()) {
     portal->printer_client_pool_.ensure_started(*selected);
-    portal->camera_client_.configure(conn);
   }
   // Cloud MQTT is already subscribed to every cloud-bound serial (see
   // PrinterClientPool's local equivalent above) — switching just re-points
@@ -4911,7 +4957,6 @@ esp_err_t SetupPortal::handle_printers_delete(httpd_req_t* request) {
   const uint8_t del_index = static_cast<uint8_t>(cJSON_GetNumberValue(index_item));
   cJSON_Delete(root);
 
-  const uint8_t active_idx = portal->config_store_.load_active_printer_index();
   const esp_err_t err = portal->config_store_.delete_printer_profile(del_index);
   if (err != ESP_OK) {
     httpd_resp_set_status(request, "404 Not Found");
@@ -4937,13 +4982,6 @@ esp_err_t SetupPortal::handle_printers_delete(httpd_req_t* request) {
   const BambuCloudCredentials cloud_creds = portal->config_store_.load_cloud_credentials();
   portal->cloud_client_.configure(cloud_creds, cloud_bound_serials(remaining),
                                   new_active != nullptr ? new_active->serial : "");
-
-  // If the deleted profile was the active one, point the camera client at
-  // whichever profile config_store_ picked as the new active index too.
-  if (del_index == active_idx) {
-    portal->camera_client_.configure(new_active != nullptr ? new_active->to_connection()
-                                                            : PrinterConnection{});
-  }
 
   send_json(request, "{\"status\":\"deleted\"}");
   return ESP_OK;
@@ -4984,10 +5022,6 @@ esp_err_t SetupPortal::handle_printers_clear_local(httpd_req_t* request) {
   // Clear this profile's own background connection — not just the active
   // one, since every profile now has its own persistent slot.
   portal->printer_client_pool_.clear(idx);
-  const uint8_t active_idx = portal->config_store_.load_active_printer_index();
-  if (idx == active_idx) {
-    portal->camera_client_.configure(PrinterConnection{});
-  }
 
   send_json(request, "{\"status\":\"local_cleared\"}");
   return ESP_OK;

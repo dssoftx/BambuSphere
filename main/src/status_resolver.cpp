@@ -266,10 +266,6 @@ bool cloud_temperature_known(uint64_t last_update_ms, bool cloud_connected) {
   return cloud_connected && last_update_ms != 0;
 }
 
-bool local_camera_available(const PrinterSnapshot& snapshot) {
-  return snapshot.local_capabilities.camera_jpeg_socket;
-}
-
 PrinterModel preferred_model_for_routing(const PrinterSnapshot& local_snapshot,
                                          const BambuCloudSnapshot& cloud_snapshot) {
   if (cloud_snapshot.model != PrinterModel::kUnknown) {
@@ -385,7 +381,6 @@ void copy_source_metadata(PrinterSnapshot& target, const PrinterSnapshot& local_
   target.status_source = FieldSource::kNone;
   target.metrics_source = FieldSource::kNone;
   target.preview_source = FieldSource::kNone;
-  target.camera_source = FieldSource::kNone;
 }
 
 void apply_base_state_for_mode(PrinterSnapshot& target, SourceMode source_mode,
@@ -1042,9 +1037,6 @@ PrinterSnapshot merge_status_sources(const PrinterSnapshot& local_snapshot, bool
   if (cloud_enabled && cloud_preview_available(cloud_snapshot, now_ms)) {
     snapshot.preview_source = FieldSource::kCloud;
     apply_cloud_preview_bundle(snapshot, cloud_snapshot);
-  }
-  if (local_enabled && local_camera_available(local_snapshot)) {
-    snapshot.camera_source = FieldSource::kLocal;
   }
 
   if (snapshot.job_name.empty() && !local_snapshot.job_name.empty() &&

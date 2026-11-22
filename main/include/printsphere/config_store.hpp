@@ -39,6 +39,18 @@ CloudRegion parse_cloud_region(const std::string& value);
 const char* to_string(DisplayRotation rotation);
 DisplayRotation parse_display_rotation(const std::string& value);
 
+// Screen (pager tab) the device shows right after it boots.
+enum class DefaultScreen : uint8_t {
+  kMain,
+  kPrinters,
+  kAms,
+  kClock,
+  kSettings,
+};
+
+const char* to_string(DefaultScreen screen);
+DefaultScreen parse_default_screen(const std::string& value);
+
 struct WifiCredentials {
   std::string ssid;
   std::string password;
@@ -145,6 +157,8 @@ class ConfigStore {
   // Defaults to off (existing behavior, unchanged from before this setting
   // existed).
   bool load_show_layer_lines_enabled() const;
+  // Tab shown after boot. Defaults to the main dashboard (existing behavior).
+  DefaultScreen load_default_screen() const;
 
   esp_err_t save_wifi_credentials(const WifiCredentials& credentials) const;
   esp_err_t save_cloud_credentials(const BambuCloudCredentials& credentials) const;
@@ -161,6 +175,7 @@ class ConfigStore {
   esp_err_t save_timezone_iana(const std::string& iana_name) const;
   esp_err_t save_clock_format_24h(bool use_24h) const;
   esp_err_t save_show_layer_lines_enabled(bool enabled) const;
+  esp_err_t save_default_screen(DefaultScreen screen) const;
   std::vector<PrinterProfile> load_printer_profiles() const;
   esp_err_t save_printer_profile(const PrinterProfile& profile) const;
   esp_err_t delete_printer_profile(uint8_t index) const;

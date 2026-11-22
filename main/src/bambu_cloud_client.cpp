@@ -481,8 +481,6 @@ SourceCapabilities merge_capabilities(const SourceCapabilities& primary,
   merged.preview = primary.preview || secondary.preview;
   merged.hms = primary.hms || secondary.hms;
   merged.print_error = primary.print_error || secondary.print_error;
-  merged.camera_jpeg_socket = primary.camera_jpeg_socket || secondary.camera_jpeg_socket;
-  merged.camera_rtsp = primary.camera_rtsp || secondary.camera_rtsp;
   merged.developer_mode_required =
       primary.developer_mode_required || secondary.developer_mode_required;
   return merged;
@@ -2070,8 +2068,7 @@ esp_err_t BambuCloudClient::start() {
 
   // Stack lives in PSRAM (8 MB available) rather than internal SRAM: this
   // task runs for the app's whole lifetime and is by far the largest
-  // long-lived stack (16 KiB) still coming out of internal RAM. See
-  // p1s_camera_client.cpp's task for the same pattern.
+  // long-lived stack (16 KiB) still coming out of internal RAM.
   const BaseType_t result = xTaskCreateWithCaps(&BambuCloudClient::task_entry, "bambu_cloud",
                                                  16384, this, 4, &task_handle_,
                                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
