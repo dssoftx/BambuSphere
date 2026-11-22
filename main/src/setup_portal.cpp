@@ -6,6 +6,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "cJSON.h"
@@ -2465,6 +2466,8 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
     add_color_field("arc_offline", "Offline", arc_colors.offline);
     add_color_field("arc_unknown", "Fallback", arc_colors.unknown);
     html += "</div>";
+    html += "<div class=\"actions\"><button type=\"button\" class=\"secondary\" id=\"arc-reset-button\">Reset to Defaults</button>";
+    html += "<div class=\"micro\">Restores every arc color to the built-in BambuSphere defaults and saves them immediately.</div></div>";
     end_collapsible_section();
   }
 
@@ -2581,6 +2584,31 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   html += "const cloudConnectButton=document.getElementById('cloud-connect-button');";
   html += "const localConnectButton=document.getElementById('local-connect-button');";
   html += "const verifyButton=document.getElementById('verify-button');";
+  {
+    // Built-in defaults for the Arc Colors "Reset to Defaults" button,
+    // straight from ArcColorScheme's default member values.
+    const ArcColorScheme defaults = {};
+    html += "const arcDefaults={";
+    const std::pair<const char*, uint32_t> default_entries[] = {
+        {"arc_printing", defaults.printing},   {"arc_done", defaults.done},
+        {"arc_error", defaults.error},         {"arc_idle", defaults.idle},
+        {"arc_preheat", defaults.preheat},     {"arc_clean", defaults.clean},
+        {"arc_level", defaults.level},         {"arc_cool", defaults.cool},
+        {"arc_idle_active", defaults.idle_active}, {"arc_filament", defaults.filament},
+        {"arc_setup", defaults.setup},         {"arc_offline", defaults.offline},
+        {"arc_unknown", defaults.unknown},
+    };
+    bool first = true;
+    for (const auto& entry : default_entries) {
+      if (!first) html += ",";
+      first = false;
+      html += entry.first;
+      html += ":'";
+      html += color_to_html_hex(entry.second);
+      html += "'";
+    }
+    html += "};";
+  }
   html += "const arcInputIds=['arc_printing','arc_done','arc_error','arc_idle','arc_preheat','arc_clean','arc_level','arc_cool','arc_idle_active','arc_filament','arc_setup','arc_offline','arc_unknown'];";
   html += "let statusLockUntil=0;";
   html += "let arcPreviewTimer=null;";
@@ -2932,6 +2960,14 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   html += "async function commitArcColors(){clearTimeout(arcPreviewTimer);try{await postArcColors('/api/arc/commit');"
           "setStatus('Arc colors saved live','The current color palette is active immediately and stored without a reboot.',4000);}"
           "catch(error){setStatus('Arc color save failed',error.message||'Live color save could not be completed.',5000);}}";
+  // Two-click confirm (no browser dialog): first click arms, second click
+  // within 4 s resets every color input to arcDefaults and saves live.
+  html += "(function(){const btn=document.getElementById('arc-reset-button');if(!btn)return;let armedTimer=null;"
+          "btn.addEventListener('click',async()=>{"
+          "if(!armedTimer){btn.textContent='Click again to confirm reset';armedTimer=setTimeout(()=>{armedTimer=null;btn.textContent='Reset to Defaults';},4000);return;}"
+          "clearTimeout(armedTimer);armedTimer=null;btn.textContent='Reset to Defaults';btn.disabled=true;"
+          "arcInputIds.forEach((id)=>{const input=document.getElementById(id);if(input&&arcDefaults[id]){input.value=arcDefaults[id];}});"
+          "try{await commitArcColors();}finally{btn.disabled=false;}});})();";
   html += "document.getElementById('config-form').addEventListener('submit',async(event)=>{event.preventDefault();"
           "saveButton.disabled=true;setStatus('Saving configuration...','The ESP restarts automatically after a successful save.',15000);"
           "try{const response=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(buildPayload())});"
