@@ -76,3 +76,7 @@ release/dev/*
 .clangd
 *.bak
 *.old
+!release/nocloud/
+release/nocloud/*
+!release/nocloud/printsphere_full.bin
+!release/nocloud/printsphere_ota.bin
