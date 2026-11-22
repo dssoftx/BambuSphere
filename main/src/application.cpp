@@ -29,7 +29,6 @@ namespace printsphere {
 namespace {
 constexpr char kTag[] = "printsphere.app";
 constexpr TickType_t kStopBannerDuration = pdMS_TO_TICKS(12000);
-constexpr TickType_t kHybridCameraCloudCooldown = pdMS_TO_TICKS(8000);
 constexpr TickType_t kLocalMqttHandoffCooldown = pdMS_TO_TICKS(30000);
 constexpr TickType_t kScreenOffTouchWakePollSlice = pdMS_TO_TICKS(25);
 constexpr TickType_t kUiCommandWakePollSlice = pdMS_TO_TICKS(50);
@@ -97,27 +96,6 @@ bool hybrid_local_status_supported(const PrinterSnapshot& local_snapshot,
                                    const BambuCloudSnapshot& cloud_snapshot) {
   return printer_model_supports_local_status(
       preferred_model_for_routing(local_snapshot, cloud_snapshot));
-}
-
-bool route_allows_local_jpeg_camera(SourceMode source_mode,
-                                    const PrinterSnapshot& local_snapshot,
-                                    const BambuCloudSnapshot& cloud_snapshot) {
-  if (source_mode == SourceMode::kCloudOnly) {
-    return false;
-  }
-
-  const PrinterModel model = preferred_model_for_routing(local_snapshot, cloud_snapshot);
-  if (printer_model_has_jpeg_camera(model)) {
-    return true;
-  }
-  if (model != PrinterModel::kUnknown) {
-    return false;
-  }
-
-  if (source_mode == SourceMode::kLocalOnly) {
-    return true;
-  }
-  return source_mode == SourceMode::kHybrid && local_snapshot.local_connected;
 }
 
 struct ChamberLightCommandPlan {
@@ -250,7 +228,7 @@ void wait_for_next_iteration(Ui& ui, TickType_t delay) {
 
 Application::Application()
     : setup_portal_(config_store_, wifi_manager_, cloud_client_, printer_client_pool_,
-                    camera_client_, ui_, pmu_manager_, audio_notifier_),
+                    ui_, pmu_manager_, audio_notifier_),
       serial_provisioner_(config_store_, wifi_manager_) {
   cloud_client_.set_config_store(&config_store_);
   // Route printer online/offline events from the Bambu Cloud MQTT feed to the
@@ -299,6 +277,7 @@ void Application::run() {
   ui_.set_battery_display_policy(config_store_.load_battery_display_policy());
   ui_.set_clock_format_24h(config_store_.load_clock_format_24h());
   ui_.set_show_layer_lines(config_store_.load_show_layer_lines_enabled());
+  ui_.set_default_screen(config_store_.load_default_screen());
   ui_.set_initial_brightness_percent(config_store_.load_display_brightness_percent());
   filament_wake_enabled_ = config_store_.load_filament_wake_enabled();
   filament_anim_enabled_ = config_store_.load_filament_anim_enabled();
@@ -369,8 +348,6 @@ void Application::run() {
   // config, not just the active one, so switching printers later just reads
   // an already-live connection instead of reconnecting from scratch.
   printer_client_pool_.sync_with_profiles(boot_profiles);
-  camera_client_.configure(printer_connection);
-  ESP_ERROR_CHECK(camera_client_.start());
 
   ESP_LOGI(kTag, "Bootstrap complete");
 
@@ -387,9 +364,8 @@ void Application::run() {
       const PrinterConnection new_conn = config_store_.load_active_printer_profile().to_connection();
       // Local MQTT (PrinterClientPool) and cloud MQTT (subscribed to every
       // cloud-bound serial already) are both already running in the
-      // background — switching is just re-pointing the camera client and
-      // telling the cloud client which serial is now active, not reconnecting.
-      camera_client_.configure(new_conn);
+      // background — switching is just telling the cloud client which serial
+      // is now active, not reconnecting.
       cloud_client_.set_active_serial(new_conn.serial);
       ESP_LOGI(kTag, "Switched active printer to profile %d", switch_idx);
     }
@@ -428,7 +404,6 @@ void Application::run() {
     const std::string wifi_ip = wifi_manager_.station_ip();
     const bool page_transition_active = ui_.is_page_transition_active();
     const bool preview_page_active = ui_.is_page2_active();
-    const bool camera_page_active = ui_.is_camera_page_active();
     source_mode_ = config_store_.load_source_mode();
     const bool source_mode_changed = source_mode_ != last_source_mode_;
     const bool wifi_lost = !wifi_connected && last_wifi_connected_;
@@ -456,16 +431,8 @@ void Application::run() {
       local_mqtt_handoff_until_tick_ = 0;
       ESP_LOGI(kTag, "Local MQTT handoff complete: local MQTT connected");
     }
-    const bool camera_page_visible = ui_.is_camera_page_visible();
-
-    if (source_mode_ == SourceMode::kHybrid && last_camera_page_active_ && !camera_page_visible &&
-        wifi_connected) {
-      hybrid_camera_cooldown_deadline_ = now_tick + kHybridCameraCloudCooldown;
-      ESP_LOGD(kTag, "Hybrid mode: delaying cloud path briefly after camera activity");
-    }
     if (source_mode_changed || wifi_lost || source_mode_ != SourceMode::kHybrid) {
       hybrid_local_gate_open_ = false;
-      hybrid_camera_cooldown_deadline_ = 0;
       // The handoff window is a hybrid-only concept; drop any stale deadline
       // on mode switch / Wi-Fi loss so it cannot block cloud MQTT later.
       local_mqtt_handoff_until_tick_ = 0;
@@ -479,22 +446,8 @@ void Application::run() {
         source_mode_ != SourceMode::kCloudOnly &&
         hybrid_local_status_supported(local_snapshot, cloud_snapshot);
     const PrinterModel routing_model = preferred_model_for_routing(local_snapshot, cloud_snapshot);
-    const bool routing_model_has_jpeg_camera = printer_model_has_jpeg_camera(routing_model);
-    const bool camera_model_has_jpeg =
-        route_allows_local_jpeg_camera(source_mode_, local_snapshot, cloud_snapshot);
-    const bool hybrid_camera_cooldown_active =
-        source_mode_ == SourceMode::kHybrid &&
-        tick_deadline_active(hybrid_camera_cooldown_deadline_, now_tick);
-    const bool hybrid_cloud_allows_warm_local =
-        !cloud_snapshot.configured ||
-        (cloud_snapshot.session_connected && cloud_snapshot.printer_online) ||
-        local_snapshot.local_connected;
-    const bool hybrid_local_camera_demand =
-        source_mode_ == SourceMode::kHybrid && routing_model_has_jpeg_camera &&
-        hybrid_cloud_allows_warm_local;
     // Local MQTT is an independent status/command transport. It must not be
-    // gated by camera type or cloud presence; only the heavier JPEG camera path
-    // remains demand-driven below.
+    // gated by cloud presence.
     if (source_mode_ == SourceMode::kHybrid) {
       if (!wifi_connected || !local_printer_enabled_) {
         if (hybrid_local_gate_open_) {
@@ -504,9 +457,8 @@ void Application::run() {
       } else {
         if (!hybrid_local_gate_open_) {
           ESP_LOGI(kTag,
-                   "Hybrid mode: local printer configured, enabling local MQTT "
-                   "(model=%s camera_demand=%d)",
-                   to_string(routing_model), hybrid_local_camera_demand ? 1 : 0);
+                   "Hybrid mode: local printer configured, enabling local MQTT (model=%s)",
+                   to_string(routing_model));
           if (!local_snapshot.local_connected) {
             // Serialize the connect phase: give the local MQTT TLS handshake a
             // quiet window without concurrent cloud HTTPS fetches / cloud MQTT
@@ -528,9 +480,6 @@ void Application::run() {
         wifi_connected && local_printer_enabled_ &&
         (source_mode_ == SourceMode::kLocalOnly ||
          (source_mode_ == SourceMode::kHybrid && hybrid_local_gate_open_));
-    const bool local_camera_network_ready =
-        local_network_ready &&
-        (source_mode_ == SourceMode::kLocalOnly || hybrid_local_camera_demand);
     active_printer_client.set_network_ready(local_network_ready);
     // Background (non-active) printers aren't part of the local/cloud status
     // arbitration above — they just need to stay connected whenever Wi-Fi is
@@ -538,7 +487,6 @@ void Application::run() {
     printer_client_pool_.set_background_network_ready(
         wifi_connected && source_mode_ != SourceMode::kCloudOnly,
         config_store_.load_active_printer_index());
-    camera_client_.set_network_ready(local_camera_network_ready);
 
     local_snapshot.wifi_connected = wifi_connected;
     local_snapshot.wifi_ip = wifi_ip;
@@ -546,7 +494,6 @@ void Application::run() {
     local_snapshot.setup_ap_ssid = wifi_manager_.setup_access_point_ssid();
     local_snapshot.setup_ap_password = wifi_manager_.setup_access_point_password();
     local_snapshot.setup_ap_ip = wifi_manager_.setup_access_point_ip();
-    camera_client_.observe_printer_snapshot(local_snapshot);
     if (last_local_print_live_ && local_snapshot.non_error_stop) {
       stop_banner_until_tick_ = now_tick + kStopBannerDuration;
     } else if (source_mode_ != SourceMode::kCloudOnly && !local_snapshot.non_error_stop) {
@@ -556,17 +503,6 @@ void Application::run() {
         local_snapshot.non_error_stop && tick_deadline_active(stop_banner_until_tick_, now_tick);
     resolve_ui_state(local_snapshot);
 
-    const bool camera_enabled =
-        source_mode_ != SourceMode::kCloudOnly && local_printer_enabled_ &&
-        local_camera_network_ready &&
-        camera_model_has_jpeg && local_snapshot.local_connected && !local_mqtt_handoff_active &&
-        camera_page_active &&
-        ui_.screen_power_mode() != ScreenPowerMode::kOff;
-    camera_client_.set_enabled(camera_enabled);
-    if (ui_.consume_camera_refresh_request()) {
-      camera_client_.request_refresh();
-    }
-
     const bool hybrid_local_path_healthy =
         source_mode_ == SourceMode::kHybrid && local_network_ready && local_printer_enabled_ &&
         local_snapshot.local_connected && hybrid_local_status_supported_now && !hybrid_prefers_cloud;
@@ -575,7 +511,7 @@ void Application::run() {
     // behaviour: cloud_network_ready=false) parked the cloud task in the
     // "Waiting for Wi-Fi" loop (visible session flapping) and forced a fresh
     // HTTPS login + bindings + preview burst — several TLS handshakes right
-    // next to the local MQTT/camera connections — whenever the user swiped to
+    // next to the local MQTT connection — whenever the user swiped to
     // the preview page. Instead the session/token stays alive and only the
     // heavy traffic sources (live MQTT, HTTPS fetches) are gated below.
     const bool cloud_network_ready = wifi_connected && source_mode_ != SourceMode::kLocalOnly;
@@ -590,8 +526,7 @@ void Application::run() {
     const bool pause_cloud_fetches =
         source_mode_ == SourceMode::kHybrid &&
         (hybrid_cloud_idle ||
-         (hybrid_local_gate_open_ &&
-          (camera_page_active || page_transition_active || hybrid_camera_cooldown_active)) ||
+         (hybrid_local_gate_open_ && page_transition_active) ||
          local_mqtt_handoff_active || !cloud_network_ready);
     cloud_client_.set_network_ready(cloud_network_ready);
     cloud_client_.set_live_mqtt_enabled(cloud_live_mqtt_enabled);
@@ -617,9 +552,6 @@ void Application::run() {
       merged.show_stop_banner =
           merged.non_error_stop && tick_deadline_active(stop_banner_until_tick_, now_tick);
       merged.preview_page_available = source_mode_ != SourceMode::kLocalOnly;
-      merged.camera_page_available =
-          route_allows_local_jpeg_camera(source_mode_, current_local_snapshot,
-                                         current_cloud_snapshot);
       return merged;
     };
     auto apply_chamber_light_override = [&](PrinterSnapshot* target_snapshot) {
@@ -739,34 +671,6 @@ void Application::run() {
       snapshot.dev_mcu_temp_c = dev_diag.mcu_temp_c;
     }
 
-    const P1sCameraSnapshot camera_snapshot = camera_client_.snapshot();
-    if (source_mode_ == SourceMode::kCloudOnly || !local_printer_enabled_ ||
-        !snapshot.camera_page_available) {
-      snapshot.camera_connected = false;
-      if (source_mode_ == SourceMode::kCloudOnly) {
-        snapshot.camera_detail = "Camera unavailable in cloud-only mode";
-      } else if (!local_printer_enabled_) {
-        snapshot.camera_detail = "Local camera not configured";
-      } else {
-        snapshot.camera_detail = "Camera unavailable on this model";
-      }
-      snapshot.camera_blob.reset();
-      snapshot.camera_width = 0;
-      snapshot.camera_height = 0;
-      snapshot.camera_source = FieldSource::kNone;
-    } else {
-      snapshot.camera_connected = camera_snapshot.connected;
-      snapshot.camera_detail = camera_snapshot.detail;
-      snapshot.camera_blob = camera_snapshot.frame_blob;
-      snapshot.camera_width = camera_snapshot.width;
-      snapshot.camera_height = camera_snapshot.height;
-      if (!camera_page_active) {
-        snapshot.camera_blob.reset();
-        snapshot.camera_width = 0;
-        snapshot.camera_height = 0;
-      }
-    }
-
     // Detect filament stage before resolve_ui_state for animation suppression and wake logic.
     const bool is_filament = is_filament_stage(snapshot.stage);
     const bool is_external_spool = snapshot.tray_tar == 254;
@@ -835,29 +739,28 @@ void Application::run() {
     const bool provisioning_active =
         snapshot.setup_ap_active ||
         snapshot.connection == PrinterConnectionState::kWaitingForCredentials;
-    // Hard wake-lock only for provisioning / camera page / page transitions.
+    // Hard wake-lock only for provisioning / page transitions.
     // An active print no longer forces the screen awake — it just switches the
     // energy policy to the "during print" timeouts (see update_power_save).
     const bool keep_screen_awake =
-        provisioning_active || camera_page_active || page_transition_active;
+        provisioning_active || page_transition_active;
     if (filament_wake_enabled_ && is_filament && is_external_spool) {
       // External-spool filament change needs the user at the printer: wake once.
       ui_.request_wake_display();
     }
     ui_.update_power_save(on_battery, keep_screen_awake, snapshot.print_active);
 
-    cloud_client_.set_low_power_mode(camera_page_active || page_transition_active ||
+    cloud_client_.set_low_power_mode(page_transition_active ||
                                      (on_battery && ui_.is_low_power_mode_active() &&
                                       !snapshot.print_active));
 
     const TickType_t loop_delay =
-        (snapshot.print_active || camera_page_active || page_transition_active ||
+        (snapshot.print_active || page_transition_active ||
          !ui_.is_low_power_mode_active())
             ? pdMS_TO_TICKS(page_transition_active ? 100 : 500)
             : pdMS_TO_TICKS(1500);
     last_source_mode_ = source_mode_;
     last_wifi_connected_ = wifi_connected;
-    last_camera_page_active_ = camera_page_visible;
     wait_for_next_iteration(ui_, loop_delay);
   }
 }

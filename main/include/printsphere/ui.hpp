@@ -27,15 +27,13 @@ class Ui {
   //   1 .. kMaxAmsUnits:            AMS unit pages (only present units enabled)
   //   kPageIdxMain:                 main dashboard
   //   kPageIdxPreview:              clock page (formerly cloud cover preview)
-  //   kPageIdxCamera:               camera feed
-  //   kPageIdxSelfSettings:         display-brightness control
+  //   kPageIdxSelfSettings:         display-brightness control + device IP
   static constexpr int kPageIdxPrinterSelect = 0;
   static constexpr int kPageIdxAmsFirst = 1;
   static constexpr int kPageIdxAmsLast = kPageIdxAmsFirst + kMaxAmsUnits - 1;
   static constexpr int kPageIdxMain = kPageIdxAmsLast + 1;
   static constexpr int kPageIdxPreview = kPageIdxMain + 1;
-  static constexpr int kPageIdxCamera = kPageIdxMain + 2;
-  static constexpr int kPageIdxSelfSettings = kPageIdxCamera + 1;
+  static constexpr int kPageIdxSelfSettings = kPageIdxPreview + 1;
   static constexpr int kPageIdxLast = kPageIdxSelfSettings;
 
   void set_display_rotation(DisplayRotation rotation);
@@ -45,8 +43,10 @@ class Ui {
   void set_clock_format_24h(bool use_24h);
   // Optional "Layer: X / Y" line under the printer name on the main page.
   void set_show_layer_lines(bool show);
+  // Tab shown after boot. Must be called before initialize().
+  void set_default_screen(DefaultScreen screen);
   void apply_snapshot(const PrinterSnapshot& snapshot);
-  // keep_awake: hard wake-lock (provisioning / camera page / page transition) —
+  // keep_awake: hard wake-lock (provisioning / page transition) —
   //             blocks both dimming and screen-off.
   // print_active: selects the "during print" timeouts instead of the idle
   //               timeouts; dimming/screen-off stay allowed per policy.
@@ -62,20 +62,12 @@ class Ui {
     return !page_scrolling_snapshot_.load(std::memory_order_relaxed) &&
            active_page_snapshot_.load(std::memory_order_relaxed) == kPageIdxPreview;
   }
-  bool is_camera_page_active() const {
-    return !page_scrolling_snapshot_.load(std::memory_order_relaxed) &&
-           active_page_snapshot_.load(std::memory_order_relaxed) == kPageIdxCamera;
-  }
-  bool is_camera_page_visible() const {
-    return active_page_snapshot_.load(std::memory_order_relaxed) == kPageIdxCamera;
-  }
   bool is_page_transition_active() const {
     return page_scrolling_snapshot_.load(std::memory_order_relaxed);
   }
   void set_portal_access_state(bool lock_enabled, bool request_authorized, bool session_active,
                                bool pin_active, const std::string& pin_code,
                                uint32_t pin_remaining_s, uint32_t session_remaining_s);
-  bool consume_camera_refresh_request();
   bool consume_chamber_light_toggle_request();
   bool has_chamber_light_toggle_request() const { return chamber_light_toggle_requested_.load(); }
   // Pause / resume / stop buttons on the preview page set this request.
@@ -233,7 +225,6 @@ class Ui {
 
   lv_obj_t* page1_ = nullptr;
   lv_obj_t* page2_ = nullptr;
-  lv_obj_t* page3_ = nullptr;
   lv_obj_t* page4_ = nullptr;
   lv_obj_t* status_arc_ = nullptr;
   lv_obj_t* progress_label_ = nullptr;
@@ -277,13 +268,11 @@ class Ui {
   lv_obj_t* page2_pause_button_label_ = nullptr;
   lv_obj_t* page2_stop_button_ = nullptr;
   lv_obj_t* page2_stop_button_label_ = nullptr;
-  lv_obj_t* page3_image_ = nullptr;
-  lv_obj_t* page3_note_ = nullptr;
-  lv_obj_t* page3_subnote_ = nullptr;
-  // Self-settings page (kPageIdxSelfSettings): brightness control.
+  // Self-settings page (kPageIdxSelfSettings): brightness control + IP.
   lv_obj_t* brightness_track_ = nullptr;
   lv_obj_t* brightness_fill_ = nullptr;
   lv_obj_t* settings_brightness_label_ = nullptr;
+  lv_obj_t* settings_ip_label_ = nullptr;
   lv_obj_t* portal_hint_label_ = nullptr;
   lv_obj_t* portal_overlay_card_ = nullptr;
   lv_obj_t* portal_overlay_title_ = nullptr;
@@ -307,9 +296,6 @@ class Ui {
   // see apply_page_visibility()) is currently applied, so it's only
   // restyled on an actual page-settle transition, not every call.
   int progress_label_style_ = 0;
-  bool camera_page_available_ = true;
-  bool camera_image_visible_ = false;
-  bool camera_text_image_mode_ = false;
   bool nozzle_aux_visible_ = false;
   bool bed_aux_visible_ = false;
   bool ring_animation_active_ = false;
@@ -345,12 +331,6 @@ class Ui {
   std::string last_diag_status_;
   std::string last_diag_detail_;
   std::string last_diag_stage_;
-  lv_image_dsc_t camera_image_dscs_[2]{};
-  std::shared_ptr<std::vector<uint8_t>> camera_blobs_[2]{};
-  uint8_t active_camera_slot_ = 0;
-  bool camera_slot_initialized_ = false;
-  uint16_t last_camera_width_ = 0;
-  uint16_t last_camera_height_ = 0;
   bool logo_clickable_ = false;
   bool logo_recolor_enabled_ = false;
   uint32_t logo_recolor_hex_ = 0;
@@ -366,8 +346,6 @@ class Ui {
   std::string portal_overlay_title_text_;
   std::string portal_overlay_value_text_;
   std::string portal_overlay_detail_text_;
-  mutable std::mutex camera_refresh_mutex_{};
-  bool camera_refresh_requested_ = false;
   std::atomic<bool> chamber_light_toggle_requested_{false};
   std::atomic<uint8_t> print_command_request_{static_cast<uint8_t>(PrintCommand::kNone)};
   std::atomic<bool> portal_unlock_requested_{false};
@@ -377,6 +355,14 @@ class Ui {
   BatteryDisplayPolicy battery_display_policy_{};
   bool clock_format_24h_ = true;
   bool show_layer_lines_ = false;
+  DefaultScreen default_screen_ = DefaultScreen::kMain;
+  // True while the configured default screen is the AMS tab but no AMS unit
+  // has been reported yet (AMS pages only become enabled once the first
+  // snapshot with AMS data arrives). Cleared on the first jump to the AMS
+  // tab, on any user touch, or once kDefaultScreenAmsWaitMs has elapsed.
+  bool default_screen_pending_ = false;
+  uint64_t default_screen_deadline_ms_ = 0;
+  int default_screen_page_locked() const;
 };
 
 }  // namespace printsphere

@@ -6,7 +6,6 @@
 #include "printsphere/bambu_cloud_client.hpp"
 #include "printsphere/config_store.hpp"
 #include "printsphere/dev_diagnostics.hpp"
-#include "printsphere/p1s_camera_client.hpp"
 #include "printsphere/pmu.hpp"
 #include "printsphere/printer_client.hpp"
 #include "printsphere/printer_client_pool.hpp"
@@ -28,7 +27,6 @@ class Application {
   WifiManager wifi_manager_{};
   BambuCloudClient cloud_client_{};
   PrinterClientPool printer_client_pool_{};
-  P1sCameraClient camera_client_{};
   Ui ui_{};
   SetupPortal setup_portal_;
   SerialProvisioner serial_provisioner_;
@@ -42,9 +40,7 @@ class Application {
   SourceMode source_mode_ = SourceMode::kHybrid;
   SourceMode last_source_mode_ = SourceMode::kHybrid;
   bool last_wifi_connected_ = false;
-  bool last_camera_page_active_ = false;
   bool hybrid_local_gate_open_ = false;
-  TickType_t hybrid_camera_cooldown_deadline_ = 0;
   // Throttles the printer-profile NVS scan feeding update_printer_cards()
   // while the printer-select page isn't active (see the run() loop).
   TickType_t printer_cards_refresh_deadline_ = 0;

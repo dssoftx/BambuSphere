@@ -72,8 +72,6 @@ struct SourceCapabilities {
   bool preview = false;
   bool hms = false;
   bool print_error = false;
-  bool camera_jpeg_socket = false;
-  bool camera_rtsp = false;
   bool developer_mode_required = false;
 };
 
@@ -117,11 +115,6 @@ struct PrinterSnapshot {
   std::string preview_url;
   std::shared_ptr<std::vector<uint8_t>> preview_blob;
   std::string preview_title;
-  std::shared_ptr<std::vector<uint8_t>> camera_blob;
-  std::string camera_detail;
-  std::string camera_rtsp_url;
-  uint16_t camera_width = 0;
-  uint16_t camera_height = 0;
   std::string cloud_detail;
   float progress_percent = 0.0f;
   bool progress_is_download_related = false;
@@ -184,12 +177,9 @@ struct PrinterSnapshot {
   PrinterModel cloud_model = PrinterModel::kUnknown;
   SourceCapabilities cloud_capabilities{};
   bool preview_page_available = true;
-  bool camera_page_available = true;
-  bool camera_connected = false;
   FieldSource status_source = FieldSource::kNone;
   FieldSource metrics_source = FieldSource::kNone;
   FieldSource preview_source = FieldSource::kNone;
-  FieldSource camera_source = FieldSource::kNone;
   bool non_error_stop = false;
   bool show_stop_banner = false;
   int hw_switch_state = -1;
@@ -213,8 +203,6 @@ const char* to_string(PrinterConnectionState state);
 const char* to_string(PrintLifecycleState state);
 const char* to_string(PrinterModel model);
 const char* to_string(FieldSource source);
-bool printer_model_has_jpeg_camera(PrinterModel model);
-bool printer_model_has_rtsp_camera(PrinterModel model);
 bool printer_model_has_chamber_temperature(PrinterModel model);
 bool printer_model_has_secondary_nozzle_temperature(PrinterModel model);
 bool printer_model_has_chamber_light(PrinterModel model);

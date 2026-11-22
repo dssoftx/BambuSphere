@@ -90,7 +90,6 @@ class PrinterClient {
     std::array<char, 24> resolved_serial{};
     std::array<char, 96> job_name{};
     std::array<char, 128> gcode_file{};
-    std::array<char, 96> camera_rtsp_url{};
     int hw_switch_state = -1;
     int tray_now = -1;
     int tray_tar = -1;
